@@ -1,0 +1,3 @@
+# Adopted shadcn-vue sources keep their upstream formatting (see apps/client/src/ui/NOTICE.md).
+apps/client/src/ui/components
+apps/client/src/ui/licenses

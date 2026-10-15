@@ -1,0 +1,48 @@
+name: localtake
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      PUBLIC_ORIGIN: https://${DOMAIN:?Set DOMAIN in deploy/.env}
+      ROOM_SIGNING_SECRET: ${ROOM_SIGNING_SECRET:?Set a random secret in deploy/.env}
+      TURN_ENABLED: ${TURN_ENABLED:-false}
+      ICE_TRANSPORT_POLICY: ${ICE_TRANSPORT_POLICY:-all}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:-}
+      TELEMETRY_DIR: /var/log/localtake
+      TELEMETRY_MAX_BYTES: "900000000"
+    volumes:
+      - telemetry:/var/log/localtake
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "2"
+    expose: ["3000"]
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in deploy/.env}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+volumes:
+  telemetry:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "paths": { "@/*": ["./apps/client/src/*"] },
+    "types": ["vite/client", "@types/wicg-file-system-access"]
+  },
+  "include": [
+    "apps/client/src/**/*.ts",
+    "apps/client/src/**/*.vue",
+    "packages/protocol/src"
+  ]
+}

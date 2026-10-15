@@ -1,0 +1,46 @@
+# Copy on the server, replace both placeholders, protect the containing directory.
+# The file must be readable by uid 65534; the shared secret is generated outside Git.
+listening-port=3478
+listening-ip=PUBLIC_IPV4
+relay-ip=PUBLIC_IPV4
+min-port=49160
+max-port=49223
+realm=studio.example.com
+no-cli
+fingerprint
+use-auth-secret
+static-auth-secret=TURN_SHARED_SECRET
+no-tls
+no-tcp-relay
+# The app uses Google STUN in normal mode. This relay only handles TURN.
+no-stun
+no-multicast-peers
+no-software-attribute
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+# Coturn 4.18 already rejects zero, loopback and internal IPv6 scopes.
+# Do not add scalar IPv6 blacklist entries: their range matching also rejects IPv4.
+relay-threads=1
+cpus=1
+userdb=/tmp/turndb
+no-dynamic-ip-list
+no-dynamic-realms
+sock-buf-size=262144
+user-quota=6
+total-quota=24
+# Coturn counts bytes/s and input/output separately; not bits/s.
+max-bps=250000
+# Capacity is reserved per allocation, including unused TCP/UDP alternatives.
+# 24 allocations * 250000 bytes/s = 6 MB/s (48 Mbit/s) per direction.
+bps-capacity=6000000
+unauthorized-ratelimit
+unauthorized-ratelimit-rps=5
+stateless-nonce
+pidfile=/tmp/turnserver.pid
+log-file=stdout
+simple-log
