@@ -1,4 +1,5 @@
 import { LocalStore } from "./store.js";
+import { storageDeadline } from "./deadline.js";
 
 // Temporarily require native folders for production recordings. Preserve OPFS
 // data and the implementation so this option can be deliberately re-enabled.
@@ -44,34 +45,85 @@ export function normalizeStorageSelection(
 export async function savedStorage(
   write?: StorageSelection,
 ): Promise<StorageSelection | null> {
-  const db = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open("localtake-preferences", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("handles");
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  try {
-    const value = await new Promise<unknown>((resolve, reject) => {
-      const transaction = db.transaction(
-        "handles",
-        write ? "readwrite" : "readonly",
-      );
-      const request = write
-        ? transaction.objectStore("handles").put(write, "recordings")
-        : transaction.objectStore("handles").get("recordings");
-      request.onerror = () => reject(request.error);
-      transaction.oncomplete = () => resolve(write ?? request.result ?? null);
-      transaction.onabort = () =>
-        reject(
-          transaction.error ??
-            new Error("Speicherauswahl konnte nicht gemerkt werden."),
-        );
-      transaction.onerror = () => reject(transaction.error);
-    });
-    return normalizeStorageSelection(value);
-  } finally {
-    db.close();
-  }
+  return storageDeadline(
+    async (signal) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("localtake-preferences", 1);
+        let settled = false;
+        const failed = (error: unknown) => {
+          settled = true;
+          signal.removeEventListener("abort", aborted);
+          reject(error);
+        };
+        const aborted = () => failed(signal.reason);
+        signal.addEventListener("abort", aborted, { once: true });
+        request.onupgradeneeded = () => {
+          if (settled) {
+            request.transaction?.abort();
+            return;
+          }
+          request.result.createObjectStore("handles");
+        };
+        request.onsuccess = () => {
+          if (settled) {
+            request.result.close();
+            return;
+          }
+          settled = true;
+          signal.removeEventListener("abort", aborted);
+          resolve(request.result);
+        };
+        request.onerror = () => failed(request.error);
+        request.onblocked = () =>
+          failed(
+            new Error(
+              "Ein anderer Tab blockiert die gespeicherte Ordnerwahl. Andere LocalTake-Tabs schließen und erneut versuchen.",
+            ),
+          );
+      });
+      try {
+        signal.throwIfAborted();
+        const value = await new Promise<unknown>((resolve, reject) => {
+          const transaction = db.transaction(
+            "handles",
+            write ? "readwrite" : "readonly",
+          );
+          const request = write
+            ? transaction.objectStore("handles").put(write, "recordings")
+            : transaction.objectStore("handles").get("recordings");
+          const finish = (error?: unknown) => {
+            signal.removeEventListener("abort", aborted);
+            if (error) reject(error);
+            else resolve(write ?? request.result ?? null);
+          };
+          const aborted = () => {
+            try {
+              transaction.abort();
+            } catch {
+              /* already completed */
+            }
+            finish(signal.reason);
+          };
+          signal.addEventListener("abort", aborted, { once: true });
+          request.onerror = () => finish(request.error);
+          transaction.oncomplete = () => finish();
+          transaction.onabort = () =>
+            finish(
+              transaction.error ??
+                new Error("Speicherauswahl konnte nicht gemerkt werden."),
+            );
+          transaction.onerror = () => finish(transaction.error);
+        });
+        return normalizeStorageSelection(value);
+      } finally {
+        db.close();
+      }
+    },
+    write
+      ? "Ordnerwahl für den nächsten Besuch merken"
+      : "Gespeicherte Ordnerwahl öffnen",
+    3000,
+  );
 }
 
 export async function storagePermission(
@@ -80,7 +132,11 @@ export async function storagePermission(
   // OPFS has no native folder permission prompt. Some Chromium derivatives
   // provide OPFS handles but do not implement queryPermission at all.
   return selection.kind === "folder"
-    ? selection.root.queryPermission({ mode: "readwrite" })
+    ? storageDeadline(
+        () => selection.root.queryPermission({ mode: "readwrite" }),
+        "Gespeicherte Ordnerfreigabe prüfen",
+        3000,
+      )
     : "granted";
 }
 

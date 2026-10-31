@@ -54,6 +54,16 @@ Die Zahlen sind illustrative Startzeiten. Kamera- und Audiosegmente müssen nich
 
 Ordnerhandles können in IndexedDB gemerkt werden. Ein erneut ausgewählter Aufnahmeordner bleibt aber auch ohne diesen Komfortzustand auswertbar.
 
+Die Schreibprüfung zeigt Ordneranlage, Dateisperre, Schreiben, Schließen, Rücklesen und Aufräumen getrennt an. Sie endet spätestens nach 15 Sekunden mit dem betroffenen Schritt, wenn der Browser nicht abschließt. Gespeicherte Ordnerwahl und nichtinteraktive Berechtigungsabfragen sind auf drei Sekunden begrenzt. Das Merken ist optional: Scheitert es, bleibt ein erfolgreich schreib-/lesegeprüfter Ordner für den aktuellen Besuch nutzbar. Native Auswahl- und Berechtigungsdialoge bleiben ohne Zeitlimit unter Kontrolle des Benutzers. Verspätete Antworten einer abgebrochenen Prüfung aktivieren keine Ablage; nur der eigene, eindeutig benannte Prüfbestand wird aufgeräumt.
+
+### Netzunterbrechung und Neuladen
+
+- **Netzverlust:** Die lokale Aufnahme hängt nicht von WSS oder WebRTC ab und läuft weiter, solange Tab, Geräte und Dateizugriff aktiv bleiben. Signalisierung verbindet sich mit begrenzter Rückoffzeit automatisch erneut; Live-/Dateikanäle werden wieder aufgebaut. Ein Host-Stopp kann einen getrennten Teilnehmer erst nach Wiederverbindung erreichen. Bei längerem Ausfall kann dieser lokal stoppen.
+- **Neuladen während Aufnahme:** Die Encoder-/Capture-Instanzen dieses Tabs enden. Bereits abgeschlossene und quittierte Segmente bleiben erhalten, ein noch ungesicherter Schluss kann verloren gehen. Ohne gültigen Abschlussbeleg wird der Bestand als unvollständig erkannt. Die laufende Aufnahme wird nach einem Reload nicht automatisch unter derselben ID weitergeführt; für weitere gemeinsame Aufnahme einen neuen Take starten.
+- **Neuladen während Übertragung:** Denselben Raum mit gespeicherter Teilnehmeridentität im selben Browserprofil öffnen und denselben Ordner erneut freigeben. Sender und Host müssen gleichzeitig verfügbar sein. Inventar, Prüfsummen und Empfangsbelege vermeiden das erneute Senden bestätigter Segmente; ein nur teilweise empfangenes Segment wird vollständig wiederholt.
+
+Browser- oder Betriebssystem-Suspendierung ist von einem reinen Netzausfall zu unterscheiden: Auf Mobilgeräten können Hintergrundseiten angehalten oder beendet werden. Die Seite für Aufnahmen im Vordergrund und das Gerät wach halten; ein Wake Lock ist keine Garantie gegen einen Prozessabbruch. Siehe [Chromium Page Lifecycle](https://developer.chrome.com/docs/web-platform/page-lifecycle-api).
+
 ## 2. Vollständige kurze Dateien
 
 ### Video

@@ -13,6 +13,7 @@ import {
   openBrowserStorage,
   browserStorageStatus,
   type StorageKind,
+  type StorageSelection,
   type BrowserStorageStatus,
 } from "../storage/selection.js";
 import { RecordingSession } from "../recorder/session.js";
@@ -781,13 +782,18 @@ export class StudioRuntime extends EventTarget {
       this.changed();
       stage = `Schreibtest für „${root.name}“`;
       const store = new LocalStore(root);
-      await store.preflight();
+      await this.checkFolder(store);
       stage = `Merken von „${root.name}“ für den nächsten Besuch`;
-      await savedStorage({ kind: "folder", root });
+      this.notice = `Schreibzugriff geprüft. Ordnerwahl für den nächsten Besuch merken …`;
+      this.changed();
+      const remembered = await this.rememberStorage({ kind: "folder", root });
       stage = `Aktivieren von „${root.name}“`;
       this.selectStorage(store, "folder");
       this.notice =
-        "Ordner ist beschreibbar. Quellen werden automatisch im Hintergrund geprüft.";
+        "Ordner ist beschreibbar. Quellen werden automatisch im Hintergrund geprüft." +
+        (remembered
+          ? ""
+          : " Die Ordnerwahl konnte nicht gemerkt werden; beim nächsten Besuch bitte erneut wählen.");
       this.changed();
     } catch (error) {
       this.notice = "";
@@ -880,7 +886,7 @@ export class StudioRuntime extends EventTarget {
         );
       stage = `Schreibtest für „${root.name}“`;
       const store = new LocalStore(root);
-      await store.preflight();
+      await this.checkFolder(store);
       stage = `Aktivieren von „${root.name}“`;
       this.selectStorage(store, "folder");
       this.notice =
@@ -898,6 +904,28 @@ export class StudioRuntime extends EventTarget {
       this.endStorageChange();
     }
     await this.scan();
+  }
+  private async checkFolder(store: LocalStore) {
+    await store.preflight((stage) => {
+      const notice = `Ordner „${store.root.name}“: ${stage} …`;
+      if (notice === this.notice) return;
+      this.notice = notice;
+      this.diagnostics.record("storage", "check.step", { stage });
+      this.changed();
+    });
+  }
+  private async rememberStorage(selection: StorageSelection) {
+    try {
+      await savedStorage(selection);
+      return true;
+    } catch (error) {
+      // A saved preference is only a convenience. A successful write/read
+      // check permits recording even if IndexedDB cannot remember the handle.
+      this.diagnostics.record("storage", "selection.remember_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
   async useDiagnostic(root: FileSystemDirectoryHandle) {
     if (!import.meta.env.DEV)

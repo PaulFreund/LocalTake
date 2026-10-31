@@ -15,6 +15,7 @@ import {
   type TrackMeta,
 } from "../../../../packages/protocol/src/index.js";
 import { LOCAL_RETENTION_MS, takePath } from "./layout.js";
+import { storageDeadline } from "./deadline.js";
 
 export type StoredInventory = Inventory & {
   archive?: Catalog;
@@ -323,59 +324,154 @@ export class LocalStore {
     readonly root: FileSystemDirectoryHandle,
     readonly area: "local" | "temp" = "local",
   ) {}
-  async preflight(): Promise<void> {
-    if (
-      this.root.queryPermission &&
-      (await this.root.queryPermission({ mode: "readwrite" })) !== "granted"
-    )
-      throw new Error(
-        `Speicherordner „${this.root.name}“ ist nicht freigegeben. Bitte „Ordner freigeben“ bestätigen.`,
-      );
-    const base = await directory(this.root, ["temp"], true);
+  async preflight(onProgress?: (stage: string) => void): Promise<void> {
     // Chrome and Edge on Windows are limited to 260 characters per path. Write
     // at the full depth and name length of a real segment receipt; the probe
     // folder has a UUID's length but not its form, so archive scans skip it.
     // temp is one character shorter than local; the extra probe character also
     // checks the real local path budget (including long transfer receipts).
     const probe = `probe-${crypto.randomUUID().replace(/-/g, "").slice(0, 31)}`;
-    try {
-      const dir = await directory(
-        base,
-        [
-          probe,
-          crypto.randomUUID(),
-          "tracks",
-          crypto.randomUUID(),
-          crypto.randomUUID(),
-        ],
-        true,
-      );
-      await writeJson(dir, "000000_000000000000us.segment.json", {
-        check: "localtake-write-read",
-        at: Date.now(),
-      });
-      await writeJson(
-        await directory(
-          base,
-          [probe, crypto.randomUUID(), "metadata", "transfers"],
-          true,
-        ),
-        `${crypto.randomUUID()}-${"0".repeat(64)}.json`,
-        { check: "localtake-transfer-receipt" },
-      );
-    } catch (error) {
-      throw new Error(
-        `Im Aufnahmeordner „${this.root.name}“ ließ sich keine Testdatei in der Ordnertiefe einer Aufnahme anlegen (${error instanceof Error ? error.message : String(error)}). Meist ist der Pfad zu lang: Chrome und Edge erlauben unter Windows höchstens 260 Zeichen, LocalTake braucht unterhalb des Ordners rund 210. Bitte einen Ordner nahe am Laufwerk wählen, z. B. „C:\\LocalTake“.`,
-        { cause: error },
-      );
-    } finally {
-      await retrying(
-        () => base.removeEntry(probe, { recursive: true }),
-        `Aufräumen von ${probe}`,
-      ).catch((error) => {
-        if ((error as DOMException).name !== "NotFoundError") throw error;
-      });
-    }
+    let stage = "Schreibfreigabe prüfen";
+    await storageDeadline(
+      async (signal) => {
+        const step = async <T>(label: string, operation: () => Promise<T>) => {
+          signal.throwIfAborted();
+          stage = label;
+          onProgress?.(label);
+          return operation();
+        };
+        const folder = async (
+          root: FileSystemDirectoryHandle,
+          parts: string[],
+        ) => {
+          let current = root;
+          for (const part of parts) {
+            const parent = current;
+            current = await step("Prüfordner anlegen", () =>
+              retrying(() => {
+                signal.throwIfAborted();
+                return parent.getDirectoryHandle(part, { create: true });
+              }, "Prüfordner anlegen"),
+            );
+          }
+          return current;
+        };
+        const writeProbe = async (
+          dir: FileSystemDirectoryHandle,
+          name: string,
+        ) => {
+          const bytes = encoder.encode(
+            JSON.stringify({ check: "localtake-write-read", at: Date.now() }),
+          ).buffer;
+          await retrying(async () => {
+            const file = await step("Prüfdatei anlegen", () =>
+              dir.getFileHandle(name, { create: true }),
+            );
+            const writable = await step("Schreibstream öffnen", () =>
+              file.createWritable(),
+            );
+            let closed = false;
+            try {
+              await step("Prüfdatei schreiben", () => writable.write(bytes));
+              await step("Prüfdatei schließen", () => writable.close());
+              closed = true;
+            } finally {
+              if (!closed) void writable.abort().catch(() => undefined);
+            }
+            const savedHandle = await step("Prüfdatei zurücklesen", () =>
+              dir.getFileHandle(name),
+            );
+            const saved = await step("Prüfdatei zurücklesen", () =>
+              savedHandle.getFile(),
+            );
+            if (saved.size !== bytes.byteLength)
+              throw new Error(
+                "Die Größe der zurückgelesenen Prüfdatei stimmt nicht.",
+              );
+            const actual = await step("Prüfdatei zurücklesen", () =>
+              saved.arrayBuffer(),
+            );
+            if ((await sha256(actual)) !== (await sha256(bytes)))
+              throw new Error(
+                "Die zurückgelesene Prüfdatei stimmt nicht mit den geschriebenen Daten überein.",
+              );
+          }, "Prüfdatei schreiben und lesen");
+        };
+        let base: FileSystemDirectoryHandle | undefined;
+        try {
+          const locks =
+            typeof navigator === "undefined" ? undefined : navigator.locks;
+          if (typeof isSecureContext !== "undefined" && !locks)
+            throw new Error(
+              "Sicherer Dateizugriff benötigt die Web Locks API.",
+            );
+          if (locks)
+            await step("Dateisperre prüfen", () =>
+              locks.request(
+                `localtake-probe-${probe}`,
+                { signal },
+                async () => {},
+              ),
+            );
+          if (
+            this.root.queryPermission &&
+            (await step("Schreibfreigabe prüfen", () =>
+              this.root.queryPermission({ mode: "readwrite" }),
+            )) !== "granted"
+          )
+            throw new Error(
+              `Speicherordner „${this.root.name}“ ist nicht freigegeben. Bitte „Ordner freigeben“ bestätigen.`,
+            );
+          base = await folder(this.root, ["temp"]);
+          const dir = await folder(base, [
+            probe,
+            crypto.randomUUID(),
+            "tracks",
+            crypto.randomUUID(),
+            crypto.randomUUID(),
+          ]);
+          await writeProbe(dir, "000000_000000000000us.segment.json");
+          const receipts = await folder(base, [
+            probe,
+            crypto.randomUUID(),
+            "metadata",
+            "transfers",
+          ]);
+          await writeProbe(
+            receipts,
+            `${crypto.randomUUID()}-${"0".repeat(64)}.json`,
+          );
+        } catch (error) {
+          const hint =
+            typeof navigator !== "undefined" &&
+            /Windows/.test(navigator.userAgent)
+              ? " Unter Windows kann der Pfad zu lang sein; bitte einen kurzen Basispfad wie C:\\LocalTake wählen."
+              : " Bitte die Zugriffsrechte prüfen oder einen anderen Ordner im internen Speicher wählen.";
+          throw new Error(
+            `Schreibprüfung für „${this.root.name}“ fehlgeschlagen (${stage}): ${error instanceof Error ? error.message : String(error)}.${hint}`,
+            { cause: error },
+          );
+        } finally {
+          if (base) {
+            const probeRoot = base;
+            // Only this uniquely named probe is removed. A late browser response
+            // cannot activate the store or continue with another probe operation.
+            if (!signal.aborted) {
+              stage = "Prüfdateien entfernen";
+              onProgress?.(stage);
+            }
+            await retrying(
+              () => probeRoot.removeEntry(probe, { recursive: true }),
+              `Aufräumen von ${probe}`,
+            ).catch((error) => {
+              if ((error as DOMException).name !== "NotFoundError") throw error;
+            });
+          }
+        }
+        signal.throwIfAborted();
+      },
+      () => `Schreibprüfung für „${this.root.name}“ (${stage})`,
+    );
   }
   // Device checks are recorded like real takes (same path length) and removed
   // afterwards. Only folders whose every participant is marked as a check go.

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LocalStore,
   writeImmutable,
@@ -83,6 +83,7 @@ class MemoryFile {
 const delays = retryPolicy.delays;
 afterEach(() => {
   retryPolicy.delays = delays;
+  vi.unstubAllGlobals();
 });
 // Chrome/Edge on Windows are not long-path aware: CreateDirectory fails above
 // 248 characters (reported as InvalidStateError), files and their .crswap
@@ -228,6 +229,7 @@ describe("local recording durability contract", () => {
     expect(root.lockedCloses).toBe(7);
   });
   it("checks the full recording depth against the Windows path limit", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Windows NT 10.0" });
     retryPolicy.delays = [1];
     const fits = windowsStore("C:\\Users\\Demo\\Desktop\\TMP_LOCALTAKE");
     await fits.preflight();

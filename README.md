@@ -66,6 +66,8 @@ Das Studio ist unter **http://localhost:43171** erreichbar. Der Koordinator laus
 
 **Aufbewahrung:** Fertige Aufnahmeordner bleiben erhalten. Temporäre Prüfdateien werden sofort entfernt. Lokale Originalsegmente werden nach bestätigter Übertragung beziehungsweise verifiziertem Export bereinigt; auch unvollständige lokale Teilbestände werden nach sieben Tagen entfernt, sobald die Anwendung mit freigegebenem Ordner läuft. Wichtige Aufnahmen und Teilbestände rechtzeitig sichern.
 
+**Bei Verbindungsproblemen:** Solange der Tab und die Aufnahmegeräte weiterlaufen, zeichnet jeder Rechner auch ohne Internet lokal weiter auf. Livecall und Dateiübernahme können pausieren; die Verbindung wird automatisch neu aufgebaut. Ein Neuladen beendet dagegen die laufende Aufnahme dieses Geräts. Bereits bestätigte Segmente bleiben als Teilbestand erhalten, der noch ungesicherte Schluss kann fehlen. Denselben Raum im selben Browserprofil öffnen und denselben Aufnahmeordner wieder freigeben, um vorhandene Daten weiter zu übertragen; eine unterbrochene Aufnahme wird nicht nahtlos fortgesetzt.
+
 ## Selbst hosten
 
 Die mitgelieferte Compose-Konfiguration startet die Anwendung hinter Caddy mit HTTPS. Ein optionaler, authentifizierter TURN-Dienst hilft bei Verbindungen zwischen restriktiven Netzen.

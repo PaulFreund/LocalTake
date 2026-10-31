@@ -62,6 +62,16 @@ Der native Release-Smoke prüfte außerdem Healthcheck, den neu gebauten statisc
 
 Der Linux-Container wurde vor dem Produktivwechsel isoliert geprüft. Bestehende Node-Tokens, HTTPS/WSS, Aufnahmebefehle, gefilterte Diagnoseablage und TURN über UDP/TCP funktionieren. Synthetische Relay-Tests bestätigten Medienempfang und SHA-256-geprüfte Dateiübertragung; kurze Zwei-Geräte-Benutzertests bestätigten lokale Kamera-/Mikrofonsicherung und quittierte Hostübernahme. Im Auto-Test wurde ein direkter Host/Host-Pfad gewählt, ohne gemeldete Paketverluste oder Video-Freezes. Ein STUN/NAT-Pfad über getrennte Netze, unabhängige Dekodierung dieser Benutzerdateien und Langzeitlast sind dadurch nicht nachgewiesen. Die bekannte Bandbreitenkonkurrenz beim begrenzten TURN-Test bleibt dokumentiert.
 
+## Schreibprüfung mit Zeitlimit und Wiederanlauf, 31.10.2026
+
+Ein gemeldeter Hänger nach der Ordnerwahl auf Android/Edge wurde auf unbegrenzt wartende Browseroperationen im bisherigen Ablauf eingegrenzt; der konkrete Android-Dateianbieter wurde nicht direkt untersucht. Die Schreibprüfung zeigt jetzt den aktuellen Schritt und endet nach spätestens 15 Sekunden, statt dauerhaft „wird geprüft“ anzuzeigen. Das optionale Merken der Auswahl und nichtinteraktive Abfragen sind auf drei Sekunden begrenzt. Eine fehlgeschlagene Speicherung der Präferenz blockiert einen erfolgreich geprüften Ordner nicht mehr. Auswahl- und Freigabedialoge besitzen weiterhin kein automatisches Zeitlimit. Die zurückgestellte OPFS-Produktionsoption bleibt deaktiviert.
+
+Bestanden: 17 Rust-Tests und 224 Vitest-Tests in 25 Dateien, Client-Typprüfung, Produktionsbuild und Formatprüfung. Acht neue Regressionen prüfen hängende Freigabe-/Schließ-/Aufräumoperationen, blockiertes oder hängendes IndexedDB, späte Antworten und einen erneuten erfolgreichen Versuch, ohne einen alten Prüflauf fortzusetzen oder vorhandene Aufnahmen zu entfernen. Der Windows-Pfadtiefentest bleibt erhalten und setzt ausdrücklich die Windows-Browserkennung für den plattformspezifischen Hinweis.
+
+Zwei zusätzliche isolierte Edge-Kontexte bestätigten den sichtbaren Dialog: Ein künstlich blockiertes Schließen endet mit genauer Phase und wieder bedienbarer Ordnerwahl; eine verspätete Antwort aktiviert den abgebrochenen Versuch nicht. Ein beschreibbarer Ordner wird trotz nicht antwortender Präferenzdatenbank übernommen. Danach bestanden synthetische Host-/Gastaufnahme mit je Kamera und Mikrofon, Neuladen des Gasts während gedrosselter Dateiübernahme, Wiederöffnung von Raum und Ablage sowie vollständig quittierter Abschluss aller Originale beim Host. Keine unbehandelten Browserausnahmen oder CSP-Verstöße; der erwartete `beforeunload`-Hinweis wurde bestätigt.
+
+Dies ist ein Desktop-Edge-Nachweis mit künstlich blockierten Browseraufrufen und isolierter Testablage, keine Freigabe eines tatsächlichen Android-Dateianbieters. Der physische Android-Test und mobile Hintergrund-/Sperrzustände bleiben zu prüfen. Das Verhalten bei Netzverlust, Neuladen und erhaltenen Teilbeständen steht unter [Aufnahmeformat](recording-format.md#netzunterbrechung-und-neuladen).
+
 ## Offene Systemabnahme
 
 Die folgenden Nachweise erfordern die tatsächliche Zielumgebung:
