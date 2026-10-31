@@ -159,6 +159,10 @@ export class StudioRuntime extends EventTarget {
   private nextCheckAt = 0;
   private cleanupLimitedProbeRevision = -1;
   private probeOperation: Promise<void> | null = null;
+  private currentProbe: RecordingSession | null = null;
+  private probePhase = "idle";
+  private lastProbeSnapshot: unknown = null;
+  private probeIo: { stage: string; started: number } | null = null;
   private cancelProbeDelay: (() => void) | null = null;
   private presenceSent = "";
   private uploadSent = "";
@@ -385,6 +389,8 @@ export class StudioRuntime extends EventTarget {
         quality: this.quality,
         armed: this.armed,
         probePassed: this.probePassed,
+        probing: this.probing,
+        probe: this.probeSnapshot(),
         readinessError: this.readinessError,
         sourceErrors: this.sourceErrors,
         storageKind: this.storageKind,
@@ -398,6 +404,17 @@ export class StudioRuntime extends EventTarget {
           enabled: source.track.enabled,
           muted: source.track.muted,
           state: source.track.readyState,
+          settings: Object.fromEntries(
+            Object.entries(source.track.getSettings()).filter(([key]) =>
+              [
+                "width",
+                "height",
+                "frameRate",
+                "sampleRate",
+                "channelCount",
+              ].includes(key),
+            ),
+          ),
         })),
       },
       recording: recording
@@ -573,7 +590,11 @@ export class StudioRuntime extends EventTarget {
       return "Mindestens eine Kamera oder ein Mikrofon hinzufügen.";
     if (this.readinessError) return this.readinessError;
     if (this.probing && !this.probePassed)
-      return "Quellen und Speicher werden automatisch geprüft.";
+      return this.probePhase === "stopping"
+        ? "Prüfaufnahme wird gespeichert und abgeschlossen."
+        : this.probePhase === "recording"
+          ? "Kurze Kamera-/Mikrofon-Prüfaufnahme läuft."
+          : "Quellen und Speicher werden automatisch geprüft.";
     if (!this.probePassed) return "Automatische Prüfung wird vorbereitet.";
     if (!this.armed) return "Aufnahmefreigabe ist ausgeschaltet.";
     return "Aufnahmebereit – Quellen und Speicher geprüft.";
@@ -1058,13 +1079,98 @@ export class StudioRuntime extends EventTarget {
       this.probeOperation = null;
     });
   }
+  get canRetryProbe() {
+    return (
+      !!this.store &&
+      this.sources.length > 0 &&
+      !this.recording &&
+      !this.pendingStart &&
+      !this.groupActive &&
+      !this.probing &&
+      !this.storageChoosing &&
+      !this.sourcesChanging &&
+      !this.busy &&
+      !this.uploadPending
+    );
+  }
+  retryProbe(): Promise<void> {
+    if (!this.canRetryProbe)
+      throw new Error(
+        "Geräteprüfung erst nach Aufnahme, Übertragung und laufender Prüfung starten.",
+      );
+    // Invoked directly by a user action, so a suspended audio context can resume.
+    void this.capture.audioContext().catch((error) => this.report(error));
+    this.checkRevision++;
+    this.readinessError = "";
+    this.changed();
+    return this.probe();
+  }
+  private probeSnapshot(): unknown {
+    const session = this.currentProbe;
+    const mainIo = this.probeIo
+      ? {
+          stage: this.probeIo.stage,
+          elapsedMs: Math.round(performance.now() - this.probeIo.started),
+        }
+      : null;
+    if (!session)
+      return (
+        this.lastProbeSnapshot ||
+        (this.probing
+          ? {
+              phase: this.probePhase,
+              quality: this.quality,
+              mainIo,
+              error: this.readinessError,
+            }
+          : null)
+      );
+    return {
+      phase: this.probePhase,
+      quality: session.quality,
+      recordingId: session.meta.recordingId,
+      status: {
+        ...session.status,
+        sources: session.status.sources.map((source) => ({ ...source })),
+      },
+      performance: Object.fromEntries(
+        [...session.performance].map(([id, metrics]) => [
+          id,
+          {
+            ...metrics,
+            ioElapsedMs:
+              metrics.ioStartedAtMs === undefined
+                ? undefined
+                : Math.max(
+                    0,
+                    Math.round(performance.now() - metrics.ioStartedAtMs),
+                  ),
+          },
+        ]),
+      ),
+      mainIo,
+      error: this.readinessError,
+    };
+  }
   private async backgroundProbe() {
     this.validate();
     if (this.groupRecording || this.busy || this.uploadPending) return;
     const revision = this.checkRevision;
-    const store = new LocalStore(this.store!.root, "temp");
+    const io = (stage?: string) => {
+      this.probeIo = stage ? { stage, started: performance.now() } : null;
+    };
+    const store = new LocalStore(this.store!.root, "temp", {
+      onWriteProgress: io,
+    });
     const wasReady = this.probePassed;
     this.probing = true;
+    this.currentProbe = null;
+    this.lastProbeSnapshot = null;
+    this.probePhase = "storage";
+    let outcome = "failed";
+    this.diagnostics.record("recorder", "check.started", {
+      quality: this.quality,
+    });
     this.changed();
     // The check is recorded exactly like a take, so it also proves that the
     // folder's path leaves room for real recordings. It is marked "check",
@@ -1074,7 +1180,10 @@ export class StudioRuntime extends EventTarget {
     let session: RecordingSession | null = null;
     try {
       try {
-        await store.preflight();
+        await store.preflight((stage, progress) => {
+          if (progress.status === "started") io(stage);
+        });
+        io();
       } catch (error) {
         this.storageWritable = false;
         throw error;
@@ -1092,7 +1201,10 @@ export class StudioRuntime extends EventTarget {
         this.quality,
         { purpose: "check" },
       );
+      this.currentProbe = session;
+      this.probePhase = "starting";
       await session.start();
+      this.probePhase = "recording";
       if (revision === this.checkRevision) {
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, 6000);
@@ -1102,8 +1214,11 @@ export class StudioRuntime extends EventTarget {
           };
         });
       }
+      this.probePhase = "stopping";
+      this.changed();
       await session.stop();
       if (revision !== this.checkRevision) return;
+      this.probePhase = "verifying";
       const inventory = await store.scan(
         session.meta.recordingId,
         session.meta.participantId,
@@ -1132,6 +1247,7 @@ export class StudioRuntime extends EventTarget {
       this.readinessError = "";
       this.lastProbeAt = Date.now();
       this.nextCheckAt = Date.now() + RECHECK_MS;
+      outcome = "passed";
     } catch (error) {
       if (revision === this.checkRevision) {
         this.probePassed = false;
@@ -1150,6 +1266,14 @@ export class StudioRuntime extends EventTarget {
       }
     } finally {
       await session?.stop().catch(() => undefined);
+      this.probePhase = revision === this.checkRevision ? outcome : "cancelled";
+      this.lastProbeSnapshot = this.probeSnapshot();
+      this.diagnostics.record(
+        "recorder",
+        `check.${this.probePhase}`,
+        this.lastProbeSnapshot,
+      );
+      this.currentProbe = null;
       this.cancelProbeDelay = null;
       // Only this check's own folder, created under a fresh id, is deleted.
       if (started && !store.cleanupPaused)
@@ -1934,6 +2058,7 @@ export class StudioRuntime extends EventTarget {
         !this.storageChoosing &&
         !this.sourcesChanging &&
         !this.uploadPending &&
+        !document.hidden &&
         (!this.store.cleanupPaused ||
           this.cleanupLimitedProbeRevision !== this.checkRevision) &&
         Date.now() >= this.nextCheckAt

@@ -29,6 +29,8 @@ export type RecorderPerformance = {
   queuedBytes: number;
   peakQueuedBytes: number;
   savedBehindSeconds: number;
+  ioStage?: string;
+  ioStartedAtMs?: number;
 };
 type WorkerHost = {
   postMessage(message: unknown): void;
@@ -52,19 +54,25 @@ let connectStream: ((stream: ReadableStream<VideoFrame>) => void) | undefined;
 const localNow = () =>
   performance.timeOrigin + performance.now() - init.mainTimeOrigin;
 let lastPerformanceAt = -Infinity;
+let ioStage: string | undefined, ioStartedAtMs: number | undefined;
+function sendPerformance() {
+  lastPerformanceAt = performance.now();
+  const metrics: RecorderPerformance = {
+    queuedBytes,
+    peakQueuedBytes,
+    savedBehindSeconds: Math.max(
+      0,
+      status.capturedSeconds - status.savedSeconds,
+    ),
+    ioStage,
+    ioStartedAtMs,
+  };
+  host.postMessage({ type: "performance", metrics });
+}
 const notify = () => {
   host.postMessage({ type: "progress", status: { ...status } });
   if (performance.now() - lastPerformanceAt >= 10_000 || failure) {
-    lastPerformanceAt = performance.now();
-    const metrics: RecorderPerformance = {
-      queuedBytes,
-      peakQueuedBytes,
-      savedBehindSeconds: Math.max(
-        0,
-        status.capturedSeconds - status.savedSeconds,
-      ),
-    };
-    host.postMessage({ type: "performance", metrics });
+    sendPerformance();
   }
 };
 const diagnostic = (stage: string) => {
@@ -500,7 +508,14 @@ host.onmessage = ({
     return;
   }
   init = data;
-  store = new LocalStore(init.root, init.area);
+  store = new LocalStore(init.root, init.area, {
+    cacheDirectories: true,
+    onWriteProgress: (stage) => {
+      ioStage = stage;
+      ioStartedAtMs = stage ? localNow() : undefined;
+      sendPerformance();
+    },
+  });
   status = {
     trackId: init.track.trackId,
     label: init.track.label,

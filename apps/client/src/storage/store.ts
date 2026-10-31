@@ -179,20 +179,89 @@ export async function sha256(bytes: ArrayBuffer): Promise<string> {
     .map((v) => v.toString(16).padStart(2, "0"))
     .join("");
 }
+// Recorder workers own their paths for one take. Cache directory handles only;
+// file snapshots and durability checks always remain fresh. Bound retained IPC handles.
+class WriterDirectories {
+  constructor(private readonly progress?: StorageWriteProgress) {}
+  private report(stage?: string) {
+    try {
+      this.progress?.(stage);
+    } catch {
+      /* Diagnostic only. */
+    }
+  }
+  private readonly children = new WeakMap<
+    FileSystemDirectoryHandle,
+    Map<string, Promise<FileSystemDirectoryHandle>>
+  >();
+  private readonly recent = new Map<
+    Promise<FileSystemDirectoryHandle>,
+    () => void
+  >();
+  get(parent: FileSystemDirectoryHandle, name: string, create: boolean) {
+    let entries = this.children.get(parent);
+    if (!entries) {
+      entries = new Map();
+      this.children.set(parent, entries);
+    }
+    let result = entries.get(name);
+    if (result) {
+      const remove = this.recent.get(result)!;
+      this.recent.delete(result);
+      this.recent.set(result, remove);
+      return result;
+    }
+    this.report(`Ordner ${name} öffnen`);
+    result = retrying(
+      () => parent.getDirectoryHandle(name, { create }),
+      `Ordner ${name}`,
+    );
+    entries.set(name, result);
+    const pending = result;
+    const remove = () => {
+      if (entries.get(name) === pending) entries.delete(name);
+    };
+    this.recent.set(result, remove);
+    if (this.recent.size > 64) {
+      const [oldest, drop] = this.recent.entries().next().value!;
+      drop();
+      this.recent.delete(oldest);
+    }
+    void result.then(
+      () => this.report(),
+      () => {
+        remove();
+        this.recent.delete(pending);
+        this.report();
+      },
+    );
+    return result;
+  }
+}
+
+export type StorageWriteProgress = (stage?: string) => void;
+type LocalStoreOptions = {
+  cacheDirectories?: boolean;
+  onWriteProgress?: StorageWriteProgress;
+};
+
 export async function directory(
   root: FileSystemDirectoryHandle,
   parts: string[],
   create = false,
+  cache?: WriterDirectories,
 ) {
   let current = root;
   for (const part of parts) {
     if (!/^[a-zA-Z0-9_.-]+$/.test(part) || part === "." || part === "..")
       throw new Error("Ungültiger Dateipfad.");
     const parent = current;
-    current = await retrying(
-      () => parent.getDirectoryHandle(part, { create }),
-      `Ordner ${part}`,
-    );
+    current = await (cache
+      ? cache.get(parent, part, create)
+      : retrying(
+          () => parent.getDirectoryHandle(part, { create }),
+          `Ordner ${part}`,
+        ));
   }
   return current;
 }
@@ -220,28 +289,44 @@ export async function writeImmutable(
   dir: FileSystemDirectoryHandle,
   name: string,
   bytes: ArrayBuffer,
+  progress?: StorageWriteProgress,
 ): Promise<string> {
   if (!/^[a-zA-Z0-9_.-]+$/.test(name) || name === "." || name === "..")
     throw new Error("Ungültiger Dateiname.");
   if (!bytes.byteLength)
     throw new Error("Leere Dateien sind kein gültiger Aufnahmebestand.");
-  const write = () => writeLocked(dir, name, bytes);
+  const stage = (value?: string) => {
+    try {
+      progress?.(value ? `${name}: ${value}` : undefined);
+    } catch {
+      /* Diagnostics must not affect a write. */
+    }
+  };
+  stage("Dateisperre");
+  const write = () => writeLocked(dir, name, bytes, stage);
   // UUID directory names make this lock common to tabs and workers for the same original.
   // A coincidentally equal name in another root merely serializes two unrelated writes.
   const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
   if (typeof isSecureContext !== "undefined" && !locks)
     throw new Error("Sicherer Dateizugriff benötigt die Web Locks API.");
-  return locks
-    ? locks.request(`localtake-file-${dir.name}-${name}`, write)
-    : write();
+  try {
+    return await (locks
+      ? locks.request(`localtake-file-${dir.name}-${name}`, write)
+      : write());
+  } finally {
+    stage();
+  }
 }
 async function writeLocked(
   dir: FileSystemDirectoryHandle,
   name: string,
   bytes: ArrayBuffer,
+  stage: StorageWriteProgress,
 ): Promise<string> {
+  stage("Prüfsumme berechnen");
   const hash = await sha256(bytes);
   return retrying(async () => {
+    stage("Vorhandene Datei prüfen");
     const existing = await existingFile(dir, name);
     // getFileHandle(create:true) may leave an empty placeholder after a crash or a
     // failed close. No valid LocalTake file is empty. Non-empty originals remain immutable.
@@ -255,15 +340,21 @@ async function writeLocked(
         `Dateikonflikt: ${name}. Vorhandene Daten bleiben erhalten.`,
       );
     }
+    stage("Datei anlegen");
     const handle = await dir.getFileHandle(name, { create: true });
+    stage("Schreibstream öffnen");
     const writable = await handle.createWritable();
     try {
+      stage("Schreiben");
       await writable.write(bytes);
+      stage("Schließen");
       await writable.close();
     } catch (error) {
+      stage("Schreibstream abbrechen");
       await writable.abort().catch(() => undefined);
       throw error;
     }
+    stage("Zurücklesen und prüfen");
     const { file: saved, bytes: savedBytes } = await readStableFile(dir, name);
     if (saved.size !== bytes.byteLength || (await sha256(savedBytes)) !== hash)
       throw new Error(`Speicherprüfung fehlgeschlagen: ${name}`);
@@ -274,11 +365,13 @@ export async function writeJson(
   dir: FileSystemDirectoryHandle,
   name: string,
   value: unknown,
+  progress?: StorageWriteProgress,
 ) {
   return writeImmutable(
     dir,
     name,
     encoder.encode(JSON.stringify(value, null, 2)).buffer,
+    progress,
   );
 }
 // Only regenerable metadata/preferences use replacement. Media and receipts
@@ -326,6 +419,7 @@ export async function inventoryFingerprint(inventory: Inventory) {
   );
 }
 export class LocalStore {
+  private readonly writerDirectories?: WriterDirectories;
   private readonly cleanupState: { error: string; manual: boolean };
   get cleanupError() {
     return this.cleanupState.error;
@@ -354,7 +448,10 @@ export class LocalStore {
   constructor(
     readonly root: FileSystemDirectoryHandle,
     readonly area: "local" | "temp" = "local",
+    private readonly options: LocalStoreOptions = {},
   ) {
+    if (options.cacheDirectories)
+      this.writerDirectories = new WriterDirectories(options.onWriteProgress);
     let state = cleanupStates.get(root);
     if (!state) {
       state = {
@@ -669,6 +766,7 @@ export class LocalStore {
       this.root,
       [this.area, recordingId, participantId],
       create,
+      this.writerDirectories,
     );
   }
   async initialize(meta: RecordingMeta) {
@@ -677,6 +775,7 @@ export class LocalStore {
       await this.participant(meta.recordingId, meta.participantId, true),
       "recording.json",
       meta,
+      this.options.onWriteProgress,
     );
   }
   async initializeTrack(recording: RecordingMeta, track: TrackMeta) {
@@ -685,17 +784,28 @@ export class LocalStore {
       recording.recordingId,
       recording.participantId,
     );
-    const dir = await directory(base, ["tracks", track.trackId], true);
-    await writeJson(dir, "track.json", {
-      formatVersion: 1,
-      trackId: track.trackId,
-      label: track.label,
-      kind: track.kind,
-    });
+    const dir = await directory(
+      base,
+      ["tracks", track.trackId],
+      true,
+      this.writerDirectories,
+    );
     await writeJson(
-      await directory(dir, [track.epochId], true),
+      dir,
+      "track.json",
+      {
+        formatVersion: 1,
+        trackId: track.trackId,
+        label: track.label,
+        kind: track.kind,
+      },
+      this.options.onWriteProgress,
+    );
+    await writeJson(
+      await directory(dir, [track.epochId], true, this.writerDirectories),
       "epoch.json",
       track,
+      this.options.onWriteProgress,
     );
     await this.clock(recording, track.clock);
   }
@@ -705,9 +815,10 @@ export class LocalStore {
       recording.participantId,
     );
     await writeJson(
-      await directory(base, ["clocks"], true),
+      await directory(base, ["clocks"], true, this.writerDirectories),
       `${mapping.id}.json`,
       mapping,
+      this.options.onWriteProgress,
     );
   }
   async event(
@@ -719,9 +830,10 @@ export class LocalStore {
       recording.participantId,
     );
     await writeJson(
-      await directory(base, ["events"], true),
+      await directory(base, ["events"], true, this.writerDirectories),
       `${crypto.randomUUID()}.json`,
       event,
+      this.options.onWriteProgress,
     );
   }
   async commit(
@@ -746,7 +858,12 @@ export class LocalStore {
       recording.recordingId,
       recording.participantId,
     );
-    const dir = await directory(base, ["tracks", track.trackId, track.epochId]);
+    const dir = await directory(
+      base,
+      ["tracks", track.trackId, track.epochId],
+      false,
+      this.writerDirectories,
+    );
     const hash = await sha256(bytes);
     const receipt = segmentSchema.parse({
       ...info,
@@ -759,11 +876,17 @@ export class LocalStore {
       byteLength: bytes.byteLength,
       clockMappingId: track.clock.id,
     });
-    await writeImmutable(dir, receipt.fileName, bytes);
+    await writeImmutable(
+      dir,
+      receipt.fileName,
+      bytes,
+      this.options.onWriteProgress,
+    );
     await writeJson(
       dir,
       receipt.fileName.replace(/\.(mp4|wav)$/, ".segment.json"),
       receipt,
+      this.options.onWriteProgress,
     );
     return receipt;
   }
@@ -773,6 +896,7 @@ export class LocalStore {
       await this.participant(recording.recordingId, recording.participantId),
       "completion.json",
       completion,
+      this.options.onWriteProgress,
     );
   }
   async segmentFile(segment: Segment): Promise<File> {

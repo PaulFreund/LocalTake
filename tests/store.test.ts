@@ -83,6 +83,7 @@ class MemoryFile {
 const delays = retryPolicy.delays;
 afterEach(() => {
   retryPolicy.delays = delays;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 // Chrome/Edge on Windows are not long-path aware: CreateDirectory fails above
@@ -123,9 +124,15 @@ const windowsStore = (path: string) =>
       path,
     ) as unknown as FileSystemDirectoryHandle,
   );
-function fixture() {
+function fixture(cacheDirectories = false) {
   const root = new MemoryDirectory(),
-    store = new LocalStore(root as unknown as FileSystemDirectoryHandle);
+    store = new LocalStore(
+      root as unknown as FileSystemDirectoryHandle,
+      "local",
+      {
+        cacheDirectories,
+      },
+    );
   const trackId = crypto.randomUUID();
   const recording: RecordingMeta = {
     formatVersion: 1,
@@ -169,6 +176,116 @@ function fixture() {
   return { root, store, recording, track, info, bytes };
 }
 describe("local recording durability contract", () => {
+  it("reuses writer directories across segments and still verifies fresh file contents", async () => {
+    const f = fixture(true);
+    await f.store.initialize(f.recording);
+    await f.store.initializeTrack(f.recording, f.track);
+    const lookup = vi.spyOn(MemoryDirectory.prototype, "getDirectoryHandle");
+    const first = await f.store.commit(f.recording, f.track, f.info, f.bytes);
+    const second = await f.store.commit(
+      f.recording,
+      f.track,
+      {
+        ...f.info,
+        sequence: 1,
+        fileName: "000001_000002000000us.wav",
+        mediaStartUs: 2_000_000,
+        sampleStart: 96_000,
+      },
+      f.bytes,
+    );
+    expect(lookup).not.toHaveBeenCalled();
+    expect(first.sha256).toEqual(second.sha256);
+    const base = await f.store.participant(
+      f.recording.recordingId,
+      f.recording.participantId,
+    );
+    const tracks = await base.getDirectoryHandle("tracks");
+    const track = await tracks.getDirectoryHandle(f.track.trackId);
+    const epoch = await track.getDirectoryHandle(f.track.epochId);
+    const file = (await epoch.getFileHandle(
+      first.fileName,
+    )) as unknown as MemoryFile;
+    file.bytes = new Uint8Array([9, 9, 9, 9]);
+    await expect(
+      f.store.commit(f.recording, f.track, f.info, f.bytes),
+    ).rejects.toThrow("Dateikonflikt");
+    expect([...file.bytes]).toEqual([9, 9, 9, 9]);
+    expect(new Uint8Array(await f.store.segmentBytes(second))).toEqual(
+      new Uint8Array(f.bytes),
+    );
+  });
+  it("does not create missing track directories on commit or retain failed writer lookups", async () => {
+    const f = fixture(true);
+    await f.store.initialize(f.recording);
+    await expect(
+      f.store.commit(f.recording, f.track, f.info, f.bytes),
+    ).rejects.toMatchObject({ name: "NotFoundError" });
+    const base = (await f.store.participant(
+      f.recording.recordingId,
+      f.recording.participantId,
+    )) as unknown as MemoryDirectory;
+    expect(base.entries.has("tracks")).toBe(false);
+    await f.store.initializeTrack(f.recording, f.track);
+    const receipt = await f.store.commit(f.recording, f.track, f.info, f.bytes);
+    expect(receipt.byteLength).toBe(f.bytes.byteLength);
+    const inventory = await f.store.scan(
+      f.recording.recordingId,
+      f.recording.participantId,
+    );
+    expect(inventory.segments).toHaveLength(1);
+    expect(inventory.tracks[0].clock).toEqual(f.track.clock);
+  });
+  it("reports a pending native close and clears progress only after verified readback", async () => {
+    const root = new MemoryDirectory();
+    const file = await root.getFileHandle("original.wav", { create: true });
+    let finishClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    const createWritable = file.createWritable.bind(file);
+    vi.spyOn(file, "createWritable").mockImplementation(async () => {
+      const stream = await createWritable();
+      return {
+        ...stream,
+        close: async () => {
+          await closeGate;
+          await stream.close();
+        },
+      };
+    });
+    const stages: (string | undefined)[] = [];
+    const operation = writeImmutable(
+      root as unknown as FileSystemDirectoryHandle,
+      "original.wav",
+      new Uint8Array([3, 4]).buffer,
+      (stage) => {
+        stages.push(stage);
+      },
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(stages.at(-1)).toBe("original.wav: Schließen"),
+      );
+      expect(file.bytes).toHaveLength(0);
+    } finally {
+      finishClose();
+    }
+    await operation;
+    expect(stages).toContain("original.wav: Zurücklesen und prüfen");
+    expect(stages.at(-1)).toBeUndefined();
+    expect([...file.bytes]).toEqual([3, 4]);
+    await expect(
+      writeImmutable(
+        root as unknown as FileSystemDirectoryHandle,
+        "other.wav",
+        new Uint8Array([5]).buffer,
+        () => {
+          throw Error("Diagnostic observer failure");
+        },
+      ),
+    ).resolves.toMatch(/^[a-f0-9]{64}$/);
+  });
   it("reacquires stale native File snapshots after close before certifying an original", async () => {
     const root = new MemoryDirectory();
     const original = await root.getFileHandle("original.mp4", { create: true });

@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
-import { Check, FolderOpen, HardDrive, LogOut, Plus, Users } from "@lucide/vue";
+import {
+  Check,
+  FolderOpen,
+  HardDrive,
+  LogOut,
+  Plus,
+  RotateCw,
+  Users,
+} from "@lucide/vue";
 import { profiles } from "../capture/manager.js";
 import { Button } from "@/ui/components/button";
 import { Input } from "@/ui/components/input";
@@ -303,6 +311,19 @@ const addSynthetic = () =>
             @update:model-value="act(() => studio.arm($event))"
           />
         </Label>
+        <Button
+          v-if="studio.store"
+          variant="outline"
+          size="sm"
+          :disabled="locked || !studio.canRetryProbe"
+          @click="act(() => studio.retryProbe())"
+        >
+          <RotateCw
+            :class="studio.probing ? 'animate-spin' : ''"
+            aria-hidden="true"
+          />
+          {{ studio.probing ? "Prüfung läuft …" : "Erneut prüfen" }}
+        </Button>
         <p v-if="studio.room.state" class="text-xs text-muted-foreground">
           {{
             studio.isDestination
