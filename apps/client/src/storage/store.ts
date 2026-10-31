@@ -116,6 +116,11 @@ async function whenUnused(
 }
 
 export const MAX_SEGMENT_BYTES = 256 * 1024 * 1024;
+export type StorageCheckProgress = {
+  status: "started" | "finished" | "failed";
+  stepMs: number;
+  totalMs: number;
+};
 const encoder = new TextEncoder();
 // Chromium maps generic OS file errors to these names. On Windows they mostly
 // mean another process (virus scanner, indexer, cloud sync) briefly holds the
@@ -324,7 +329,9 @@ export class LocalStore {
     readonly root: FileSystemDirectoryHandle,
     readonly area: "local" | "temp" = "local",
   ) {}
-  async preflight(onProgress?: (stage: string) => void): Promise<void> {
+  async preflight(
+    onProgress?: (stage: string, progress: StorageCheckProgress) => void,
+  ): Promise<void> {
     // Chrome and Edge on Windows are limited to 260 characters per path. Write
     // at the full depth and name length of a real segment receipt; the probe
     // folder has a UUID's length but not its form, so archive scans skip it.
@@ -332,13 +339,48 @@ export class LocalStore {
     // checks the real local path budget (including long transfer receipts).
     const probe = `probe-${crypto.randomUUID().replace(/-/g, "").slice(0, 31)}`;
     let stage = "Schreibfreigabe prüfen";
+    const started = performance.now();
+    let cancelled: unknown;
     await storageDeadline(
       async (signal) => {
-        const step = async <T>(label: string, operation: () => Promise<T>) => {
+        const active = () => {
           signal.throwIfAborted();
+          if (cancelled) throw cancelled;
+        };
+        const step = async <T>(
+          label: string,
+          operation: (signal: AbortSignal) => Promise<T>,
+        ) => {
+          active();
           stage = label;
-          onProgress?.(label);
-          return operation();
+          const stepStarted = performance.now();
+          const report = (status: StorageCheckProgress["status"]) => {
+            if (!signal.aborted && !cancelled)
+              onProgress?.(label, {
+                status,
+                stepMs: Math.round(performance.now() - stepStarted),
+                totalMs: Math.round(performance.now() - started),
+              });
+          };
+          report("started");
+          try {
+            const result = await storageDeadline(
+              operation,
+              `Schreibprüfung für „${this.root.name}“ (${label})`,
+              15_000,
+              signal,
+            );
+            report("finished");
+            return result;
+          } catch (error) {
+            report("failed");
+            if (
+              signal.aborted ||
+              (error as Error)?.name === "StorageTimeoutError"
+            )
+              cancelled = error;
+            throw error;
+          }
         };
         const folder = async (
           root: FileSystemDirectoryHandle,
@@ -349,7 +391,7 @@ export class LocalStore {
             const parent = current;
             current = await step("Prüfordner anlegen", () =>
               retrying(() => {
-                signal.throwIfAborted();
+                active();
                 return parent.getDirectoryHandle(part, { create: true });
               }, "Prüfordner anlegen"),
             );
@@ -406,10 +448,10 @@ export class LocalStore {
               "Sicherer Dateizugriff benötigt die Web Locks API.",
             );
           if (locks)
-            await step("Dateisperre prüfen", () =>
+            await step("Dateisperre prüfen", (lockSignal) =>
               locks.request(
                 `localtake-probe-${probe}`,
-                { signal },
+                { signal: lockSignal },
                 async () => {},
               ),
             );
@@ -442,6 +484,11 @@ export class LocalStore {
             `${crypto.randomUUID()}-${"0".repeat(64)}.json`,
           );
         } catch (error) {
+          if (
+            (error as Error)?.name === "StorageTimeoutError" ||
+            signal.aborted
+          )
+            throw error;
           const hint =
             typeof navigator !== "undefined" &&
             /Windows/.test(navigator.userAgent)
@@ -456,21 +503,30 @@ export class LocalStore {
             const probeRoot = base;
             // Only this uniquely named probe is removed. A late browser response
             // cannot activate the store or continue with another probe operation.
-            if (!signal.aborted) {
-              stage = "Prüfdateien entfernen";
-              onProgress?.(stage);
+            const cleanup = () =>
+              retrying(
+                () => probeRoot.removeEntry(probe, { recursive: true }),
+                `Aufräumen von ${probe}`,
+              ).catch((error) => {
+                if ((error as DOMException).name !== "NotFoundError")
+                  throw error;
+              });
+            if (signal.aborted || cancelled) {
+              // A failed native call must not hide its error behind another
+              // stalled operation. Cleanup only this probe, with its own bound.
+              void storageDeadline(cleanup, "Prüfdateien entfernen").catch(
+                () => undefined,
+              );
+            } else {
+              await step("Prüfdateien entfernen", cleanup);
             }
-            await retrying(
-              () => probeRoot.removeEntry(probe, { recursive: true }),
-              `Aufräumen von ${probe}`,
-            ).catch((error) => {
-              if ((error as DOMException).name !== "NotFoundError") throw error;
-            });
           }
         }
         signal.throwIfAborted();
       },
-      () => `Schreibprüfung für „${this.root.name}“ (${stage})`,
+      () =>
+        `Gesamte Schreibprüfung für „${this.root.name}“ (zuletzt: ${stage})`,
+      90_000,
     );
   }
   // Device checks are recorded like real takes (same path length) and removed

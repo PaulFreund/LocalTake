@@ -76,6 +76,12 @@ Die zusätzliche Prüfung eines Neuladens **während einer laufenden Aufnahme** 
 
 Ein eigener Browserlauf lud den Gast mitten im Take neu: Ordner und Raum wurden wieder geöffnet, der Gast erschien als Teilbestand, der Host konnte regulär stoppen und die vier bestätigten Gastsegmente kamen beim Host an. Der Hostbestand war vollständig, der Gastbestand blieb korrekt als unvollständig gekennzeichnet. Beide Teilnehmer wurden anschließend wieder bereit und zeichneten einen neuen Take mit eigener ID auf; dessen Abschluss und Übertragung bestanden. Keine unbehandelten Browserausnahmen oder CSP-Verstöße.
 
+## Zeitbudget pro Dateioperation, 31.10.2026
+
+Nach dem anschließenden Android-Test trat der Gesamt-Timeout in Edge und Chrome beim zuletzt angezeigten Schritt „Prüfdatei schließen“ auf. Das bisherige 15-Sekunden-Limit galt jedoch für alle Operationen zusammen und belegte damit keine 15 Sekunden blockierte Schließoperation. Der Benutzer bestätigte ausdrücklich die Beschränkung auf native Aufnahmeordner; Browserablage bleibt deaktiviert. Die Prüfung gibt jetzt jedem Hintergrundaufruf 15 Sekunden, begrenzt den gesamten Ablauf auf 90 Sekunden und protokolliert Schritt- und Gesamtdauern. Zwei weitere Regressionen prüfen einen erfolgreichen Abschluss nach zwölf Sekunden Ordnerarbeit plus fünf Sekunden Schließen sowie das Gesamtlimit bei vielen jeweils noch rechtzeitig beantworteten Aufrufen. Der tatsächliche Android-Dateianbieter muss erneut geprüft werden.
+
+Bestanden: 17 Rust- und 231 Vitest-Tests in 26 Vitest-Dateien, Client-Typprüfung, Produktionsbuild und Formatprüfung. Der isolierte Browserlauf akzeptierte den künstlich verzögerten Ordner mit 17.021 ms Gesamtdauer bei 5.001 ms Schließdauer. Ein dauerhaft blockierter Schließaufruf, verspätete Antworten und eine hängende Präferenzdatenbank wurden weiterhin korrekt behandelt. Gemeinsame Host-/Gastaufnahme, Neuladen während der Übertragung und quittierter vollständiger Empfang bestanden erneut. Das ist ein Nachweis der Zeitbudgetkorrektur mit simulierten Verzögerungen, kein physischer Android-Schreibnachweis.
+
 ## Offene Systemabnahme
 
 Die folgenden Nachweise erfordern die tatsächliche Zielumgebung:

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setImmediate } from "node:timers/promises";
-import { LocalStore } from "../apps/client/src/storage/store.js";
+import {
+  LocalStore,
+  type StorageCheckProgress,
+} from "../apps/client/src/storage/store.js";
 import { MemoryDirectory, MemoryFile } from "./helpers/memory-files.js";
 
 afterEach(() => {
@@ -14,6 +17,97 @@ async function until(check: () => boolean) {
 }
 
 describe("bounded native folder check", () => {
+  it("allows a responsive close after earlier folder work consumed the old total budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const root = new MemoryDirectory();
+    const get = root.getDirectoryHandle.bind(root);
+    vi.spyOn(root, "getDirectoryHandle").mockImplementationOnce(
+      async (...args) => {
+        await new Promise((resolve) => setTimeout(resolve, 12_000));
+        return get(...args);
+      },
+    );
+    const create = MemoryFile.prototype.createWritable;
+    vi.spyOn(MemoryFile.prototype, "createWritable").mockImplementationOnce(
+      async function (this: MemoryFile) {
+        const stream = await create.call(this);
+        const close = stream.close.bind(stream);
+        stream.close = async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          await close();
+        };
+        return stream;
+      },
+    );
+    const closes: StorageCheckProgress[] = [];
+    let done = false;
+    let failure: unknown;
+    const operation = new LocalStore(
+      root as unknown as FileSystemDirectoryHandle,
+    )
+      .preflight((stage, progress) => {
+        if (stage === "Prüfdatei schließen" && progress.status === "finished")
+          closes.push(progress);
+      })
+      .then(
+        () => {
+          done = true;
+        },
+        (error) => {
+          done = true;
+          failure = error;
+        },
+      );
+    for (let i = 0; i < 40 && !done; i++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await setImmediate();
+    }
+    await operation;
+    expect(failure).toBeUndefined();
+    expect(closes[0]).toMatchObject({ stepMs: 5000 });
+    expect(closes[0].totalMs).toBeGreaterThan(15_000);
+    expect((await root.getDirectoryHandle("temp")).entries.size).toBe(0);
+  });
+
+  it("still bounds the whole check when many individually responsive operations add up", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const get = MemoryDirectory.prototype.getDirectoryHandle;
+    const calls = vi
+      .spyOn(MemoryDirectory.prototype, "getDirectoryHandle")
+      .mockImplementation(async function (this: MemoryDirectory, ...args) {
+        await new Promise((resolve) => setTimeout(resolve, 12_000));
+        return get.call(this, ...args);
+      });
+    let done = false;
+    let failure: unknown;
+    const operation = new LocalStore(
+      new MemoryDirectory() as unknown as FileSystemDirectoryHandle,
+    )
+      .preflight()
+      .then(
+        () => {
+          done = true;
+        },
+        (error) => {
+          done = true;
+          failure = error;
+        },
+      );
+    for (let i = 0; i < 95 && !done; i++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await setImmediate();
+    }
+    await operation;
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(
+      /Gesamte Schreibprüfung.*90 Sekunden/,
+    );
+    const stoppedAt = calls.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await setImmediate();
+    expect(calls).toHaveBeenCalledTimes(stoppedAt);
+  });
+
   it("shows write, close, read and cleanup steps and preserves existing data", async () => {
     const root = new MemoryDirectory();
     const original = await root.getDirectoryHandle("local", { create: true });

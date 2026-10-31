@@ -293,12 +293,16 @@ export class StudioRuntime extends EventTarget {
         if (this.store || this.storageRevision !== storageRevision) return;
         if (permission === "granted") {
           const store = new LocalStore(selection.root);
-          await store.preflight();
+          if (selection.kind === "folder") await this.checkFolder(store);
+          else await store.preflight();
           const status =
             selection.kind === "browser" ? await browserStorageStatus() : null;
           if (this.store || this.storageRevision !== storageRevision) return;
           this.selectStorage(store, selection.kind);
           this.browserStorage = status;
+          if (selection.kind === "folder")
+            this.notice =
+              "Aufnahmeordner ist wieder verfügbar. Quellen werden automatisch geprüft.";
           this.changed();
           await this.scan();
         } else {
@@ -907,13 +911,37 @@ export class StudioRuntime extends EventTarget {
     await this.scan();
   }
   private async checkFolder(store: LocalStore) {
-    await store.preflight((stage) => {
-      const notice = `Ordner „${store.root.name}“: ${stage} …`;
-      if (notice === this.notice) return;
-      this.notice = notice;
-      this.diagnostics.record("storage", "check.step", { stage });
+    let current = "Schreibfreigabe prüfen";
+    let stepStarted = performance.now();
+    const started = stepStarted;
+    const show = () => {
+      this.notice = `Ordner „${store.root.name}“: ${current} … (${Math.floor((performance.now() - stepStarted) / 1000)} s)`;
       this.changed();
-    });
+    };
+    const timer = setInterval(show, 1000);
+    try {
+      await store.preflight((stage, progress) => {
+        this.diagnostics.record("storage", "check.step", {
+          stage,
+          ...progress,
+        });
+        if (progress.status === "started") {
+          current = stage;
+          stepStarted = performance.now();
+          show();
+        }
+      });
+    } catch (error) {
+      this.diagnostics.record("storage", "check.failed", {
+        stage: current,
+        stepMs: Math.round(performance.now() - stepStarted),
+        totalMs: Math.round(performance.now() - started),
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    } finally {
+      clearInterval(timer);
+    }
   }
   private async rememberStorage(selection: StorageSelection) {
     try {

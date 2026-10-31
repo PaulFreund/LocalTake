@@ -4,9 +4,12 @@ export async function storageDeadline<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   label: string | (() => string),
   timeoutMs = 15_000,
+  parent?: AbortSignal,
 ): Promise<T> {
+  parent?.throwIfAborted();
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let parentAborted: (() => void) | undefined;
   try {
     return await Promise.race([
       operation(controller.signal),
@@ -20,8 +23,16 @@ export async function storageDeadline<T>(
           reject(error);
         }, timeoutMs);
       }),
+      new Promise<never>((_resolve, reject) => {
+        parentAborted = () => {
+          controller.abort(parent?.reason);
+          reject(parent?.reason);
+        };
+        parent?.addEventListener("abort", parentAborted, { once: true });
+      }),
     ]);
   } finally {
     clearTimeout(timer);
+    if (parentAborted) parent?.removeEventListener("abort", parentAborted);
   }
 }
