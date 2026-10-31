@@ -4,6 +4,7 @@ import {
   Camera,
   CameraOff,
   Circle,
+  LoaderCircle,
   Mic,
   MicOff,
   Pause,
@@ -61,8 +62,14 @@ const progress = computed(() => {
       }
     : { saved: 0, captured: 0 };
 });
+const preparing = computed(
+  () =>
+    studio.value.pendingStart ||
+    studio.value.room.state?.take?.phase === "preparing",
+);
 const active = computed(
-  () => !!studio.value.recording || studio.value.groupActive,
+  () =>
+    !preparing.value && (!!studio.value.recording || studio.value.groupActive),
 );
 const blocked = computed(() => {
   return studio.value.startBlocked;
@@ -262,19 +269,19 @@ const pill =
     >
       <div class="order-1 flex items-center gap-2 px-2" aria-live="polite">
         <span
-          v-if="studio.recording"
+          v-if="studio.recording && !preparing"
           class="size-2 animate-pulse rounded-full bg-red-500"
           aria-hidden="true"
         />
         <span class="font-mono text-sm tabular-nums">{{
           duration(
-            studio.pendingStart
+            preparing
               ? 0
               : (studio.recording?.elapsedSeconds ?? progress.captured),
           )
         }}</span>
         <span
-          v-if="studio.recording"
+          v-if="studio.recording && !preparing"
           class="text-xs text-muted-foreground tabular-nums"
           :title="`${duration(progress.saved)} sicher geschrieben`"
           :class="{ 'text-destructive': failedSources.length }"
@@ -282,15 +289,11 @@ const pill =
             failedSources.length ? " · Spur ausgefallen" : ""
           }}</span
         >
-        <span
-          v-else-if="studio.pendingStart"
-          class="text-xs text-muted-foreground"
-          >{{
-            studio.room.state?.take?.phase === "preparing"
-              ? "Vorbereitung läuft …"
-              : "Gemeinsamer Start …"
-          }}</span
-        >
+        <span v-else-if="preparing" class="text-xs text-muted-foreground">{{
+          studio.room.state?.take?.phase === "preparing"
+            ? "Vorbereitung läuft …"
+            : "Gemeinsamer Start …"
+        }}</span>
         <StatusBadge
           v-else-if="studio.lastRecording"
           :label="statusLabel(lastState())"
@@ -392,30 +395,58 @@ const pill =
         class="order-3 hidden h-6 w-px bg-border sm:block"
         aria-hidden="true"
       />
-      <Tooltip :disabled="!blocked && !active">
+      <Tooltip :disabled="!blocked && !active && !preparing">
         <TooltipTrigger as-child>
-          <span class="order-2 sm:order-4" :tabindex="blocked ? 0 : undefined">
+          <span
+            class="order-2 inline-flex items-center gap-2 sm:order-4"
+            :tabindex="blocked || preparing ? 0 : undefined"
+          >
             <Button
-              :variant="active ? 'destructive' : 'default'"
+              :variant="
+                preparing ? 'outline' : active ? 'destructive' : 'default'
+              "
               size="lg"
               class="rounded-full"
-              :disabled="!!blocked"
+              :disabled="!!blocked || preparing"
+              :aria-busy="preparing"
               @click="act(() => studio.record())"
             >
-              <Square v-if="active" fill="currentColor" aria-hidden="true" />
+              <LoaderCircle
+                v-if="preparing"
+                class="animate-spin"
+                aria-hidden="true"
+              />
+              <Square
+                v-else-if="active"
+                fill="currentColor"
+                aria-hidden="true"
+              />
               <Circle
                 v-else
                 class="text-red-500"
                 fill="currentColor"
                 aria-hidden="true"
               />
-              {{ active ? "Stoppen" : "Aufnehmen" }}
+              {{
+                preparing ? "Vorbereitung …" : active ? "Stoppen" : "Aufnehmen"
+              }}
             </Button>
+            <Button
+              v-if="preparing && (studio.isHost || !studio.room.state)"
+              variant="outline"
+              size="lg"
+              class="rounded-full"
+              aria-label="Vorbereitung abbrechen"
+              @click="act(() => studio.record())"
+              >Abbrechen</Button
+            >
           </span>
         </TooltipTrigger>
         <TooltipContent>{{
-          blocked ||
-          (studio.isHost ? "Aufnahme für alle stoppen" : "Lokal stoppen")
+          preparing
+            ? "Die Aufnahme startet, sobald alle Geräte vorbereitet sind."
+            : blocked ||
+              (studio.isHost ? "Aufnahme für alle stoppen" : "Lokal stoppen")
         }}</TooltipContent>
       </Tooltip>
     </div>
