@@ -14,13 +14,13 @@ Automatische Protokolle enthalten keine Audio-/Video-/Dateiinhalte, Chattexte od
 
 ## Speichergrenzen
 
-`TELEMETRY_DIR=/var/log/localtake` aktiviert die Speicherung; ohne Variable bleibt sie deaktiviert. Docker mountet dafür ein eigenes persistentes Volume, das dem Benutzer `node` gehört. Eine App-Instanz schreibt in ein Volume. Mehrere gleichzeitige Writer werden nicht unterstützt.
+`TELEMETRY_DIR=/var/log/localtake` aktiviert die Speicherung; ohne Variable bleibt sie deaktiviert. Docker mountet dafür ein eigenes persistentes Volume, das dem Benutzer `localtake` gehört (UID/GID 1000 wie zuvor `node`). Eine App-Instanz schreibt in ein Volume. Mehrere gleichzeitige Writer werden nicht unterstützt.
 
 - Höchstens **900.000.000 Bytes** für eigene JSONL-Diagnosedateien, auch wenn `TELEMETRY_MAX_BYTES` einen größeren Wert angibt.
 - Höchstens **8.000.000 Bytes je Datei**, zusätzliche Rotation nach einem Tag. Vor dem nächsten Schreibvorgang, der die Gesamtgrenze überschreiten würde, werden die ältesten Dateien gelöscht. Beim Start wird ein bestehender Überhang entfernt.
 - Dateien älter als sieben Tage werden beim Start, Schreiben und einer minütlichen Wartung entfernt. Hohe Aktivität kann die tatsächlich verfügbare Historie verkürzen.
 - Normale Docker-App-Logs: `json-file`, `max-size=25m`, `max-file=2`. **Diagnose und Docker-App-Logs zusammen: höchstens rund 952.428.800 Bytes**, unter einem dezimalen GB. Dies gilt für LocalTake; Logs anderer Dienste und Reverse-Proxy-Logs besitzen eigene Grenzen.
-- Schreibqueue höchstens 2 MiB und 512 wartende Zeilen, asynchrone Schreibgruppen höchstens 64 KiB. Bei voller Queue werden neue Diagnosen verworfen. Bei weniger als 256 MiB freiem Datenträgerspeicher, Schreibschutz oder I/O-Fehler wird die Queue verworfen und eine Minute pausiert. Diagnosefehler führen zu keinen wiederholten Konsolenmeldungen. Routinemäßige Fastify-Request-Logs sind abgeschaltet.
+- Schreibqueue höchstens 2 MiB und 512 Zeilen einschließlich laufender Schreibvorgänge, Schreibgruppen höchstens 64 KiB auf einem separaten Writer-Thread. Bei voller Queue werden neue Diagnosen verworfen. Bei weniger als 256 MiB freiem Datenträgerspeicher, Schreibschutz oder I/O-Fehler wird die Queue verworfen und eine Minute pausiert. Diagnosefehler führen zu keinen wiederholten Konsolenmeldungen. Routinemäßige HTTP-Request-Logs sind abgeschaltet.
 
 Die Rotation betrifft ausschließlich eigene `telemetry-<Zeit>-<UUID>.jsonl`-Dateien im konfigurierten Verzeichnis. Andere Dateien werden nicht gelöscht. Die Grenzen werden in der Anwendung durchgesetzt; das Volume muss dafür keine 900 MB vorab reservieren. Allgemeine CPU-/I/O-Konkurrenz lässt sich nicht vollständig ausschließen, ist jedoch durch diese Mengen- und Zeitgrenzen beschränkt.
 
@@ -29,10 +29,10 @@ Die Rotation betrifft ausschließlich eigene `telemetry-<Zeit>-<UUID>.jsonl`-Dat
 Mit administrativem Zugriff auf den eigenen Docker-Host, ohne Raumtoken zu benötigen:
 
 ```sh
-docker compose exec app node dist/apps/server/src/telemetry-read.js
-docker compose exec app node dist/apps/server/src/telemetry-read.js --room RAUM-UUID
-docker compose exec app node dist/apps/server/src/telemetry-read.js --page BROWSER-UUID
-docker compose exec app node dist/apps/server/src/telemetry-read.js --recording AUFNAHME-UUID
+docker compose exec app localtake-server telemetry-read
+docker compose exec app localtake-server telemetry-read --room RAUM-UUID
+docker compose exec app localtake-server telemetry-read --page BROWSER-UUID
+docker compose exec app localtake-server telemetry-read --recording AUFNAHME-UUID
 docker compose logs --tail=100 app
 ```
 

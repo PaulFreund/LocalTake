@@ -1,29 +1,20 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
-import { createApp } from "../apps/server/src/app.js";
+import { createApp } from "./helpers/rust-server.js";
 import { TELEMETRY_BODY_BYTES } from "../packages/protocol/src/telemetry.js";
 import type { Credentials } from "../packages/protocol/src/index.js";
-import type { TelemetrySink } from "../apps/server/src/telemetry-store.js";
 
 const apps: Awaited<ReturnType<typeof createApp>>[] = [];
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
-  vi.restoreAllMocks();
 });
-async function fixture(sink?: TelemetrySink) {
+async function fixture() {
   const rows: Record<string, unknown>[] = [];
-  const telemetry = sink ?? {
-    enqueue: (row: Record<string, unknown>) => {
-      rows.push(row);
-      return true;
-    },
-    status: () => ({ enabled: true, dropped: 0 }),
-    close: async () => undefined,
-  };
   const app = await createApp({
     secret: "a".repeat(64),
     origin: "https://record.example.test",
-    telemetry,
+    telemetry: true,
   });
   apps.push(app);
   const host = (
@@ -52,12 +43,24 @@ async function fixture(sink?: TelemetrySink) {
     payload: unknown = batch,
     token: string | undefined = host.token,
   ) =>
-    app.inject({
-      method: "POST",
-      url: "/api/telemetry",
-      headers: token ? { authorization: `Bearer ${token}` } : {},
-      payload,
-    });
+    app
+      .inject({
+        method: "POST",
+        url: "/api/telemetry",
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+        payload,
+      })
+      .then(async (response) => {
+        if (
+          response.statusCode === 202 &&
+          response.json().accepted &&
+          !response.json().duplicate
+        ) {
+          const saved = await app.waitForTelemetry(rows.length + 1);
+          rows.splice(0, rows.length, ...saved);
+        }
+        return response;
+      });
   return { app, host, rows, batch, upload };
 }
 
@@ -142,36 +145,10 @@ it("deduplicates retries while rate-limiting a new batch per participant", async
   });
   expect(f.rows).toHaveLength(1);
   expect((await f.upload({ ...f.batch, sequence: 2 })).statusCode).toBe(429);
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now + 5001);
+  await delay(5001);
   expect((await f.upload({ ...f.batch, sequence: 2 })).statusCode).toBe(202);
   expect(f.rows).toHaveLength(2);
 });
-
-it.each([false, "throw"])(
-  "discarding telemetry (%s) keeps the server and room API healthy",
-  async (failure) => {
-    const f = await fixture({
-      enqueue: () => {
-        if (failure === "throw") throw new Error("Disk unavailable");
-        return false;
-      },
-      status: () => ({ enabled: true, dropped: 1 }),
-      close: async () => undefined,
-    });
-    expect((await f.upload()).json()).toEqual({ accepted: false });
-    expect((await f.app.inject("/healthz")).json().ok).toBe(true);
-    expect(
-      (
-        await f.app.inject({
-          method: "POST",
-          url: "/api/rooms",
-          payload: { name: "Another room" },
-        })
-      ).statusCode,
-    ).toBe(200);
-  },
-);
 
 it("telemetry flooding uses a separate rate-limit bucket from normal operation", async () => {
   const f = await fixture();

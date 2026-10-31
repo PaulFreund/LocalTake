@@ -17,7 +17,9 @@ docker compose logs --tail=100 app caddy
 
 Caddy benötigt TCP 80/443 und optional UDP 443. Der App-Port 3000 ist nur im Container-Netz erreichbar. `PUBLIC_ORIGIN` wird aus `DOMAIN` gebildet und muss dem tatsächlichen Browser-Origin entsprechen. Die Anwendung speichert keine Medien auf dem Server; Originale liegen auf den Rechnern der Teilnehmer.
 
-Die App läuft als Benutzer `node`, mit schreibgeschütztem Dateisystem, ohne Linux-Capabilities und ohne Medienvolume. `GET /healthz` ist der Healthcheck. Caddy persistiert Zertifikate und Konfiguration. Die Compose-Vorlage aktiviert außerdem begrenzte Serverdiagnosen in einem eigenen Volume; zum Abschalten `TELEMETRY_DIR` aus der App-Umgebung entfernen. Siehe [Diagnose und Aufbewahrung](../docs/telemetry.md).
+Das Dockerfile baut den Browserclient mit Node.js 24 und den Koordinator mit Rust 1.90. Im Alpine-Laufzeitimage liegen nur der gebaute Client und das native `localtake-server`-Binary; Node.js und npm werden dort nicht benötigt. Die App läuft als Benutzer `localtake` mit UID/GID 1000, mit schreibgeschütztem Dateisystem, ohne Linux-Capabilities und ohne Medienvolume. UID/GID entsprechen dem bisherigen Benutzer `node`, sodass bestehende Diagnosevolumes weiter beschreibbar bleiben.
+
+Der native Docker-Healthcheck lautet `localtake-server healthcheck` und prüft `GET /healthz`. Caddy persistiert Zertifikate und Konfiguration. Die Compose-Vorlage aktiviert außerdem begrenzte Serverdiagnosen in einem eigenen Volume; zum Abschalten `TELEMETRY_DIR` aus der App-Umgebung entfernen. Siehe [Diagnose und Aufbewahrung](../docs/telemetry.md) und [Rust-Port](../docs/server-rust.md).
 
 ## Verbindung mit STUN und TURN
 
@@ -59,6 +61,7 @@ studio.example.com {
 
 ## Updates und Wiederanlauf
 
+- Beim Wechsel vom Node- zum Rust-Server bleiben Umgebungsvariablen, HTTP-/WebSocket-Protokoll, bestehende Raumtokens und Diagnosevolumes kompatibel. Den bisherigen Signaturschlüssel und das Diagnosevolume beibehalten; Client und Server gemeinsam aus dem gleichen Quellstand bauen.
 - Eine App-Instanz verwaltet den Raumzustand im RAM. Mehrere Instanzen brauchen eine zusätzliche gemeinsame Raumverwaltung.
 - Updates zwischen Takes durchführen. Ein Neustart unterbricht Signalisierung und verliert den aktuellen Raumzustand; Clients können sich mit demselben Signaturschlüssel erneut anmelden. Die lokale Aufnahme ist vom Koordinator getrennt. Vor dem nächsten Take Qualität und Bereitschaft prüfen.
 - Raum- und Einladungstokens gelten bei Ausstellung ein Jahr, Relay-Zugangsdaten einen Tag. Tokens haben keine individuelle Widerrufsliste. Ein Wechsel des Signaturschlüssels macht bestehende Raumzugänge ungültig.

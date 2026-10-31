@@ -37,7 +37,7 @@ UI, Signalisierung und Recorder haben getrennte Lebenszyklen. Vue besitzt die An
 
 ### Koordinationsdienst
 
-Ein TypeScript-Dienst mit Node.js LTS, Fastify und WebSocket erfüllt folgende Aufgaben:
+Ein Rust-Dienst mit Axum, Tokio und WebSocket erfüllt folgende Aufgaben:
 
 - Statische Clientdateien und eine kleine HTTP-API ausliefern.
 - Räume erstellen, maximal vier Teilnehmer zulassen und Rollen prüfen.
@@ -229,4 +229,4 @@ deploy/                    # Dockerfile, Compose und Caddy-/TURN-Beispiele
 tests/                     # Protokoll-, Recovery-, PCM- und Transfertests
 ```
 
-Npm Workspaces reichen aus. Versionen werden mit Lockfile fixiert. Ein zweites Backend-Framework, eine zusätzliche Medienplattform und eine native Begleitanwendung sind für den bestätigten Startumfang nicht vorgesehen.
+Client und gemeinsame TypeScript-Typen verwenden npm Workspaces, der Server einen Cargo-Workspace. `package-lock.json` und `Cargo.lock` fixieren die Abhängigkeiten. Das Runtime-Image benötigt kein Node.js. Begrenzte Raum-, Verbindungs- und Diagnosequeues sowie die RAM-Prüfung beschreibt [server-rust.md](server-rust.md). Eine zusätzliche Medienplattform und eine native Begleitanwendung sind für den bestätigten Startumfang nicht vorgesehen.

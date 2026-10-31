@@ -1,0 +1,860 @@
+[
+  {
+    "name": "0: auth",
+    "input": {
+      "type": "auth",
+      "version": 1,
+      "token": "token",
+      "name": "  Host  ",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "auth",
+      "version": 1,
+      "token": "token",
+      "name": "Host"
+    }
+  },
+  {
+    "name": "1: auth",
+    "input": {
+      "type": "auth",
+      "version": 1,
+      "token": "",
+      "name": "﻿ Host ",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "auth",
+      "version": 1,
+      "token": "",
+      "name": "Host"
+    }
+  },
+  {
+    "name": "2: clock.probe",
+    "input": {
+      "type": "clock.probe",
+      "t1": 0,
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "clock.probe",
+      "t1": 0
+    }
+  },
+  {
+    "name": "3: clock.probe",
+    "input": {
+      "type": "clock.probe",
+      "t1": 1e100,
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "clock.probe",
+      "t1": 1e100
+    }
+  },
+  {
+    "name": "4: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001"
+    }
+  },
+  {
+    "name": "5: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "linkId": "10000000-0000-4000-8000-000000000001",
+      "restart": true,
+      "description": {
+        "type": "offer",
+        "sdp": "v=0",
+        "ignored": true
+      },
+      "candidate": null,
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "linkId": "10000000-0000-4000-8000-000000000001",
+      "restart": true,
+      "description": {
+        "type": "offer",
+        "sdp": "v=0"
+      },
+      "candidate": null
+    }
+  },
+  {
+    "name": "6: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "candidate": {
+        "candidate": "",
+        "sdpMid": null,
+        "sdpMLineIndex": 64,
+        "usernameFragment": null,
+        "ignored": true
+      },
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "candidate": {
+        "candidate": "",
+        "sdpMid": null,
+        "sdpMLineIndex": 64,
+        "usernameFragment": null
+      }
+    }
+  },
+  {
+    "name": "7: media",
+    "input": {
+      "type": "media",
+      "media": {
+        "micMuted": false,
+        "camMuted": true,
+        "sharing": false,
+        "ignored": true
+      },
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "media",
+      "media": {
+        "micMuted": false,
+        "camMuted": true,
+        "sharing": false,
+        "livePaused": false
+      }
+    }
+  },
+  {
+    "name": "8: ready",
+    "input": {
+      "type": "ready",
+      "ready": true,
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "ready",
+      "ready": true
+    }
+  },
+  {
+    "name": "9: ready",
+    "input": {
+      "type": "ready",
+      "ready": false,
+      "reason": "",
+      "archiveReady": false,
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "ready",
+      "ready": false,
+      "reason": "",
+      "archiveReady": false
+    }
+  },
+  {
+    "name": "10: room.quality",
+    "input": {
+      "type": "room.quality",
+      "quality": "2160",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "room.quality",
+      "quality": "2160"
+    }
+  },
+  {
+    "name": "11: archive.status",
+    "input": {
+      "type": "archive.status",
+      "status": {
+        "pending": 1,
+        "bytes": 1.5,
+        "total": 1e100,
+        "state": "waiting",
+        "reason": ""
+      },
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "archive.status",
+      "status": {
+        "pending": 1,
+        "bytes": 1.5,
+        "total": 1e100,
+        "state": "waiting",
+        "reason": ""
+      }
+    }
+  },
+  {
+    "name": "12: record.prepare",
+    "input": {
+      "type": "record.prepare",
+      "commandId": "10000000-0000-4000-8000-000000000001",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "record.prepare",
+      "commandId": "10000000-0000-4000-8000-000000000001"
+    }
+  },
+  {
+    "name": "13: record.ready",
+    "input": {
+      "type": "record.ready",
+      "recordingId": "10000000-0000-4000-8000-000000000001",
+      "ready": false,
+      "reason": "Speicher",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "record.ready",
+      "recordingId": "10000000-0000-4000-8000-000000000001",
+      "ready": false,
+      "reason": "Speicher"
+    }
+  },
+  {
+    "name": "14: record.stop",
+    "input": {
+      "type": "record.stop",
+      "recordingId": "10000000-0000-4000-8000-000000000001",
+      "commandId": "10000000-0000-4000-8000-000000000001",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "record.stop",
+      "commandId": "10000000-0000-4000-8000-000000000001",
+      "recordingId": "10000000-0000-4000-8000-000000000001"
+    }
+  },
+  {
+    "name": "15: record.status",
+    "input": {
+      "type": "record.status",
+      "status": {
+        "recordingId": "10000000-0000-4000-8000-000000000001",
+        "state": "saved",
+        "sources": [
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          }
+        ]
+      },
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "record.status",
+      "status": {
+        "recordingId": "10000000-0000-4000-8000-000000000001",
+        "state": "saved",
+        "sources": [
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "16: chat",
+    "input": {
+      "type": "chat",
+      "text": "  Hallo 🌍  ",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "chat",
+      "text": "Hallo 🌍"
+    }
+  },
+  {
+    "name": "17: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "00000000-0000-0000-0000-000000000000",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "peer.signal",
+      "to": "00000000-0000-0000-0000-000000000000"
+    }
+  },
+  {
+    "name": "18: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "peer.signal",
+      "to": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    }
+  },
+  {
+    "name": "19: host",
+    "input": {
+      "type": "host",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "20: guest",
+    "input": {
+      "type": "guest",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "21: unknown",
+    "input": {
+      "type": "unknown",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "22: object",
+    "input": null,
+    "expected": null
+  },
+  {
+    "name": "23: object",
+    "input": [],
+    "expected": null
+  },
+  {
+    "name": "24: string",
+    "input": "chat",
+    "expected": null
+  },
+  {
+    "name": "25: object",
+    "input": {
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "26: auth",
+    "input": {
+      "type": "auth",
+      "version": 2,
+      "token": "token",
+      "name": "Host",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "27: auth",
+    "input": {
+      "type": "auth",
+      "version": 1,
+      "token": "token",
+      "name": " ",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "28: auth",
+    "input": {
+      "type": "auth",
+      "version": 1,
+      "token": "token",
+      "name": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "auth",
+      "version": 1,
+      "token": "token",
+      "name": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    }
+  },
+  {
+    "name": "29: clock.probe",
+    "input": {
+      "type": "clock.probe",
+      "t1": -1,
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "30: clock.probe",
+    "input": {
+      "type": "clock.probe",
+      "t1": "1",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "31: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "restart": false,
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "32: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "description": null,
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "33: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "candidate": {
+        "candidate": "x",
+        "sdpMLineIndex": 1.5
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "34: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "candidate": {
+        "candidate": "x",
+        "sdpMLineIndex": -1
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "35: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-4000-8000-000000000001",
+      "candidate": {
+        "candidate": "x",
+        "sdpMLineIndex": 65
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "36: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000-0000-0000-8000-000000000001",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "37: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "38: peer.signal",
+    "input": {
+      "type": "peer.signal",
+      "to": "10000000000040008000000000000001",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "39: media",
+    "input": {
+      "type": "media",
+      "media": {
+        "micMuted": false,
+        "camMuted": false
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "40: media",
+    "input": {
+      "type": "media",
+      "media": {
+        "micMuted": false,
+        "camMuted": false,
+        "sharing": false,
+        "livePaused": null
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "41: ready",
+    "input": {
+      "type": "ready",
+      "ready": true,
+      "reason": null,
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "42: ready",
+    "input": {
+      "type": "ready",
+      "ready": 1,
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "43: room.quality",
+    "input": {
+      "type": "room.quality",
+      "quality": 1080,
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "44: room.quality",
+    "input": {
+      "type": "room.quality",
+      "quality": "480",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "45: archive.status",
+    "input": {
+      "type": "archive.status",
+      "status": {
+        "pending": 0.5,
+        "bytes": 0,
+        "total": 0,
+        "state": "idle"
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "46: archive.status",
+    "input": {
+      "type": "archive.status",
+      "status": {
+        "pending": 9007199254740992,
+        "bytes": 0,
+        "total": 0,
+        "state": "idle"
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "47: record.status",
+    "input": {
+      "type": "record.status",
+      "status": {
+        "recordingId": "10000000-0000-4000-8000-000000000001",
+        "state": "saved",
+        "sources": [
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": -1,
+            "segments": 1
+          }
+        ]
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "48: record.status",
+    "input": {
+      "type": "record.status",
+      "status": {
+        "recordingId": "10000000-0000-4000-8000-000000000001",
+        "state": "saved",
+        "sources": [
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": -1,
+            "bytes": 100,
+            "segments": 1
+          }
+        ]
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "49: record.status",
+    "input": {
+      "type": "record.status",
+      "status": {
+        "recordingId": "10000000-0000-4000-8000-000000000001",
+        "state": "saved",
+        "sources": [
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          },
+          {
+            "trackId": "10000000-0000-4000-8000-000000000001",
+            "label": "Kamera",
+            "kind": "video",
+            "state": "saved",
+            "savedSeconds": 1.5,
+            "capturedSeconds": 2,
+            "bytes": 100,
+            "segments": 1
+          }
+        ]
+      },
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "50: chat",
+    "input": {
+      "type": "chat",
+      "text": " \t\r\n ",
+      "ignored": "strip this field"
+    },
+    "expected": null
+  },
+  {
+    "name": "51: chat",
+    "input": {
+      "type": "chat",
+      "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "ignored": "strip this field"
+    },
+    "expected": {
+      "type": "chat",
+      "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    }
+  }
+]

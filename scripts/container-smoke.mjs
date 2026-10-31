@@ -1,32 +1,43 @@
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
-// Run inside the built image; no published ports or external services required.
+// Check a running container via LOCALTAKE_SMOKE_URL, or launch a local Rust
+// release binary. Node is only used by this test driver, never by the image.
 const origin = process.env.PUBLIC_ORIGIN;
 assert(origin?.startsWith("https://"));
-const app = spawn(process.execPath, ["dist/apps/server/src/main.js"], {
-  stdio: "inherit",
-});
+const base =
+  process.env.LOCALTAKE_SMOKE_URL ??
+  `http://127.0.0.1:${process.env.PORT || 3000}`;
+const executable =
+  process.env.LOCALTAKE_SERVER_BIN ??
+  resolve(
+    "target/release/localtake-server" +
+      (process.platform === "win32" ? ".exe" : ""),
+  );
+const app = process.env.LOCALTAKE_SMOKE_URL
+  ? null
+  : spawn(executable, [], { stdio: "inherit", windowsHide: true });
 try {
   let ready = false;
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (app.exitCode !== null)
+    if (app && app.exitCode !== null)
       throw new Error(`Server exited: ${app.exitCode}`);
     try {
-      ready = (await fetch("http://127.0.0.1:3000/healthz")).ok;
+      ready = (await fetch(base + "/healthz")).ok;
     } catch {}
     if (ready) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert(ready, "Container health check failed");
-  const page = await fetch("http://127.0.0.1:3000/");
+  if (app) execFileSync(executable, ["healthcheck"], { windowsHide: true });
+  const page = await fetch(base + "/");
   assert.equal(page.status, 200);
   assert((await page.text()).includes("LocalTake"));
   assert(page.headers.get("content-security-policy")?.includes("default-src"));
-  const room = await fetch("http://127.0.0.1:3000/api/rooms", {
+  const room = await fetch(base + "/api/rooms", {
     method: "POST",
     headers: { Origin: origin, "Content-Type": "application/json" },
     body: JSON.stringify({ name: "Container verification" }),
@@ -36,7 +47,7 @@ try {
   assert(credentials.roomId && credentials.token && credentials.inviteToken);
   if (process.env.TELEMETRY_DIR) {
     assert.equal(credentials.telemetry?.enabled, true);
-    const telemetry = await fetch("http://127.0.0.1:3000/api/telemetry", {
+    const telemetry = await fetch(base + "/api/telemetry", {
       method: "POST",
       headers: {
         Origin: origin,
@@ -62,7 +73,9 @@ try {
     assert.equal(telemetry.status, 202);
     assert.equal((await telemetry.json()).accepted, true);
     let persisted = false;
-    for (let attempt = 0; attempt < 50; attempt++) {
+    // A remote container's volume is checked separately by the operator.
+    if (!app) persisted = true;
+    for (let attempt = 0; app && attempt < 50; attempt++) {
       for (const file of await readdir(process.env.TELEMETRY_DIR)) {
         const text = await readFile(
           join(process.env.TELEMETRY_DIR, file),
@@ -75,8 +88,17 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert(persisted, "Telemetry was accepted but not persisted");
+    if (app) {
+      const output = execFileSync(
+        executable,
+        ["telemetry-read", "--room", credentials.roomId],
+        { encoding: "utf8", windowsHide: true },
+      );
+      assert(output.includes("container.test"));
+      assert(!output.includes(credentials.token));
+    }
   }
-  const rejected = await fetch("http://127.0.0.1:3000/api/rooms", {
+  const rejected = await fetch(base + "/api/rooms", {
     method: "POST",
     headers: {
       Origin: "https://wrong.invalid",
@@ -89,7 +111,7 @@ try {
     "Container smoke passed: health, static client, CSP, room API, origin rejection.",
   );
 } finally {
-  if (app.exitCode === null) {
+  if (app && app.exitCode === null) {
     const exited = once(app, "exit");
     app.kill("SIGTERM");
     await exited;

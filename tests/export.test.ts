@@ -31,6 +31,7 @@ import type {
 const delays = retryPolicy.delays;
 afterEach(() => {
   retryPolicy.delays = delays;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -810,6 +811,10 @@ describe("original export", () => {
   it.each([false, true])(
     "retires a verified legacy export but preserves user additions (%s)",
     async (extra) => {
+      // Both remuxes must use the same MP4 creation timestamp for this byte-
+      // identity fixture, even when the test crosses a wall-clock second.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-26T12:00:00.000Z"));
       const f = await fixture(false, { sessionName: "Podcast" });
       const old = await f.handle.getDirectoryHandle(
         `LocalTake-${sessionStamp(f.inventory.recording.createdAt)}-${f.inventory.recording.recordingId.slice(0, 8)}`,

@@ -33,7 +33,7 @@ Die Screenshots zeigen die tatsächliche Oberfläche mit synthetischen Kamera- u
 - **Desktop-Chrome oder Microsoft Edge** mit WebCodecs und File System Access API.
 - **HTTPS oder localhost**, damit Kamera, Mikrofon und Aufnahmeordner verfügbar sind.
 - **Kopfhörer** und ein lokaler Aufnahmeordner mit ausreichend freiem Platz.
-- Für die Entwicklung: **Node.js ab 22.19 und npm**. Das Docker-Image verwendet Node.js 24.
+- Für die Entwicklung: **Node.js ab 22.19, npm und Rust ab 1.90 mit Cargo**. Docker baut den Client mit Node.js 24 und den Server mit Rust; das Laufzeitimage benötigt kein Node.js.
 
 Unter Windows einen kurzen Basispfad wie `C:\LocalTake` wählen: Browser und temporäre Schreibdateien können an der Windows-Pfadgrenze scheitern. Ordner mit aktiver Cloud-Synchronisierung möglichst vermeiden. Browser ohne native Ordnerfreigabe sind derzeit kein unterstützter Aufnahmeweg; die alternative Browserablage ist deaktiviert.
 
@@ -82,14 +82,14 @@ npm run format:check
 npm audit
 ```
 
-`npm start` startet den gebauten Dienst. Für einen lokalen Test des Builds `PUBLIC_ORIGIN=http://localhost:43170` setzen; Produktion erfordert `NODE_ENV=production`, HTTPS und einen dauerhaft gespeicherten zufälligen Signaturschlüssel.
+`npm start` baut bei Bedarf den Rust-Dienst im Releaseprofil und startet ihn. Ein bereits gebauter Server lässt sich direkt mit `target/release/localtake-server` starten, unter Windows mit `.exe`. Für einen lokalen Test des Builds `PUBLIC_ORIGIN=http://localhost:43170` setzen; Produktion erfordert `NODE_ENV=production`, HTTPS und einen dauerhaft gespeicherten zufälligen Signaturschlüssel.
 
 | Bereich              | Technik                                                            |
 | -------------------- | ------------------------------------------------------------------ |
 | Oberfläche           | Vue, TypeScript, Tailwind CSS, shadcn-vue / reka-ui                |
 | Aufnahme             | WebCodecs, AudioWorklet, Mediabunny, File System Access API        |
 | Live und Übertragung | WebRTC-Mesh und DataChannels mit STUN/TURN                         |
-| Koordinator          | Node.js, Fastify, WebSocket; flüchtiger Raumzustand ohne Datenbank |
+| Koordinator          | Rust, Axum, Tokio und WebSocket; flüchtiger Raumzustand ohne Datenbank |
 | Betrieb              | Docker, Caddy, optional coturn                                     |
 
 ## Stand und Grenzen
@@ -101,6 +101,7 @@ Raumlinks sind Zugangsberechtigungen und sollten vertraulich geteilt werden. Es 
 ## Weitere Dokumentation
 
 - [Prüfstand und reproduzierbare Prüfungen](docs/verification.md)
+- [Rust-Koordinator, Kompatibilität und RAM-Prüfung](docs/server-rust.md)
 - [Anforderungen und offene Abnahme](docs/acceptance.md)
 - [Architektur](docs/architecture.md)
 - [Aufnahmeformat, Wiederherstellung und Export](docs/recording-format.md)
