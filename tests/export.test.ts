@@ -372,9 +372,10 @@ describe("original export", () => {
       local: [],
     });
     expect(sessions[0].participants.map((p) => [p.name, p.state])).toEqual([
-      ["Host", "done"],
-      ["RemoteTest", "done"],
+      ["Host", "unverified"],
+      ["RemoteTest", "unverified"],
     ]);
+    expect(sessions[0].settled).toBe(true);
     expect(hostUploadPending(room, hostId, sessions)).toBe(false);
   });
   it("rejects a receipt pointing to a different case-sensitive folder", async () => {

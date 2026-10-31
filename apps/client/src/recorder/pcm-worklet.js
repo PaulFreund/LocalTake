@@ -35,7 +35,11 @@ class LocalTakePcm extends AudioWorkletProcessor {
           if (reply.type === "recycle") this.pool.push(reply.buffer);
         };
         this.target.start();
+        this.active = !data.deferredStart;
+      }
+      if (data.type === "start" && !this.active) {
         this.active = true;
+        this.nextFrame = null;
       }
       if (data.type === "stop") {
         this.active = false;

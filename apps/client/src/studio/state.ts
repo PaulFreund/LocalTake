@@ -45,6 +45,7 @@ export const statusLabel = (value: string) =>
     finalizing: "Wird gesichert",
     saved: "Gesichert",
     partial: "Teilbestand",
+    unverified: "Aufnahmedauer ungeprüft",
     failed: "Fehler",
     offering: "Inventar kommt an",
     offered: "Bereit zur Übernahme",
@@ -57,7 +58,7 @@ export const statusLabel = (value: string) =>
 export const statusTone = (value: string) =>
   ["failed", "error"].includes(value)
     ? "bad"
-    : ["partial", "paused"].includes(value)
+    : ["partial", "paused", "unverified"].includes(value)
       ? "warning"
       : ["saved", "done"].includes(value)
         ? "good"
@@ -73,6 +74,7 @@ export const participantLabel = (value: ParticipantState) =>
     done: "Vollständig",
     local: "Lokal gesichert",
     partial: "Teilbestand",
+    unverified: "Aufnahmedauer ungeprüft",
     failed: "Keine Originale",
   })[value];
 export const participantTone = (value: ParticipantState) =>
@@ -85,6 +87,7 @@ export const participantTone = (value: ParticipantState) =>
     done: "good",
     local: "good",
     partial: "warning",
+    unverified: "warning",
     failed: "bad",
   })[value] as "neutral" | "warning" | "good" | "bad";
 export const sessionTitle = (iso: string) =>

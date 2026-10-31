@@ -51,6 +51,7 @@ const inventory = (
     clockMappingId: crypto.randomUUID(),
   })),
   complete: true,
+  coverageVerified: true,
   issues: [],
 });
 const status = (

@@ -174,7 +174,7 @@ pub fn client_message(mut value: Value) -> Result<Value, InvalidMessage> {
         "room.quality" => &["type", "quality"],
         "archive.status" => &["type", "status"],
         "record.prepare" => &["type", "commandId"],
-        "record.ready" => &["type", "recordingId", "ready", "reason"],
+        "record.ready" => &["type", "recordingId", "ready", "reason", "prepared"],
         "record.stop" => &["type", "commandId", "recordingId"],
         "record.status" => &["type", "status"],
         "chat" => &["type", "text"],
@@ -222,6 +222,7 @@ pub fn client_message(mut value: Value) -> Result<Value, InvalidMessage> {
                 optional(obj, "archiveReady", boolean)?;
             } else {
                 required(obj, "recordingId", id)?;
+                optional(obj, "prepared", boolean)?;
             }
         }
         "room.quality" => required(obj, "quality", quality)?,
@@ -342,6 +343,8 @@ pub struct Take {
     pub ready: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_at: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_at: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

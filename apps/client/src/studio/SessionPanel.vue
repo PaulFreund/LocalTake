@@ -22,6 +22,8 @@ const summary = (session: SessionView) => {
     };
   if (states.some((s) => s === "failed" || s === "partial"))
     return { label: "Unvollständig", tone: "warning" as const };
+  if (states.includes("unverified"))
+    return { label: "Aufnahmedauer ungeprüft", tone: "warning" as const };
   return {
     label: session.role === "slave" ? "Beim Host gesichert" : "Vollständig",
     tone: "good" as const,

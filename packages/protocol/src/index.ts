@@ -64,6 +64,7 @@ export type RoomTake = {
   participants: string[];
   ready: string[];
   startAt?: number;
+  stopAt?: number;
   reason?: string;
 };
 // The host is the session master: it sets the recording quality for everyone
@@ -134,6 +135,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("record.ready"),
     recordingId: idSchema,
     ready: z.boolean(),
+    prepared: z.boolean().optional(),
     reason: z.string().max(200).optional(),
   }),
   z.object({
@@ -171,7 +173,12 @@ export type ServerMessage =
     }
   | { type: "record.prepare"; take: RoomTake }
   | { type: "record.start"; take: RoomTake }
-  | { type: "record.stop"; recordingId: string; commandId: string }
+  | {
+      type: "record.stop";
+      recordingId: string;
+      commandId: string;
+      stopAt?: number;
+    }
   | { type: "chat"; from: string; name: string; text: string; id: string }
   | { type: "error"; message: string; code: string };
 
@@ -248,6 +255,7 @@ export type Inventory = {
   tracks: TrackMeta[];
   segments: Segment[];
   complete: boolean;
+  coverageVerified?: boolean;
   issues: string[];
   warnings?: string[];
 };
@@ -258,6 +266,13 @@ export const completionSchema = z.object({
   finishedAt: z.string().datetime(),
   sources: z.array(sourceStatusSchema).max(16),
   issues: z.array(z.string().max(500)).max(1000).optional(),
+  timing: z
+    .object({ startMs: z.number().finite(), stopMs: z.number().finite() })
+    .refine(
+      (value) => value.stopMs >= value.startMs,
+      "Aufnahmeende liegt vor dem Start.",
+    )
+    .optional(),
 });
 export type Completion = z.infer<typeof completionSchema>;
 // Written by the receiving host per take (one press of record until stop), so
@@ -268,6 +283,7 @@ export const sessionManifestSchema = z.object({
   roomId: idSchema.optional(),
   startedAt: z.string().datetime(),
   roomName: nameSchema.optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
   participants: z
     .array(
       z.object({
@@ -286,6 +302,7 @@ export const inventorySchema = z.object({
   tracks: z.array(trackMetaSchema).max(64),
   segments: z.array(segmentSchema).max(100_000),
   complete: z.boolean(),
+  coverageVerified: z.boolean().optional(),
   issues: z.array(z.string().max(500)).max(1000),
   warnings: z.array(z.string().max(500)).max(1000).optional(),
 });

@@ -2,6 +2,53 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 
+it("keeps a prepared microphone silent until the explicit start signal", () => {
+  let Processor: any;
+  const messages: any[] = [];
+  const scope = {
+    sampleRate: 48000,
+    currentFrame: 0,
+    AudioWorkletProcessor: class {
+      port: any = {};
+    },
+    registerProcessor: (_: string, ctor: any) => {
+      Processor = ctor;
+    },
+  };
+  runInNewContext(
+    readFileSync("apps/client/src/recorder/pcm-worklet.js", "utf8"),
+    scope,
+  );
+  const processor = new Processor({ processorOptions: { channels: 1 } });
+  processor.port.onmessage({
+    data: {
+      type: "connect",
+      deferredStart: true,
+      port: {
+        start() {},
+        postMessage(message: any) {
+          messages.push(message);
+        },
+      },
+    },
+  });
+  const input = [new Float32Array(128).fill(0.25)];
+  for (let n = 0; n < 10; n++) {
+    scope.currentFrame = n * 128;
+    processor.process([input], [[new Float32Array(128)]]);
+  }
+  expect(messages).toEqual([]);
+  expect(processor.position).toBe(0);
+  processor.port.onmessage({ data: { type: "start" } });
+  scope.currentFrame = 1280;
+  processor.process([input], [[new Float32Array(128)]]);
+  processor.port.onmessage({ data: { type: "stop" } });
+  expect(messages.find((m) => m.type === "pcm")).toMatchObject({
+    firstFrame: 1280,
+    frames: 128,
+  });
+});
+
 it("retains every PCM sample when one stale clock tick catches up on the next callback", () => {
   let Processor: any;
   const scope = {

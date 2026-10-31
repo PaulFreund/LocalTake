@@ -8,6 +8,7 @@ import {
 } from "../capture/manager.js";
 import { LocalStore, holdOriginals } from "../storage/store.js";
 import { SessionClock } from "../core/clock.js";
+import { storageDeadline } from "../storage/deadline.js";
 import type {
   RecordingMeta,
   RecordingStatus,
@@ -15,6 +16,10 @@ import type {
   TrackMeta,
 } from "../../../../packages/protocol/src/index.js";
 import type { Init, RecorderPerformance } from "./worker.js";
+import {
+  coverageIssue,
+  type CaptureWindow,
+} from "../../../../packages/protocol/src/coverage.js";
 
 const FINALIZE_IDLE_MS = 30_000;
 const FINALIZE_MAX_MS = 120_000;
@@ -25,6 +30,7 @@ type Runner = {
   stop: (reason?: string) => void;
   finished: Promise<SourceStatus>;
   ready: Promise<void>;
+  activate: () => void;
   cleanup: () => void;
 };
 export class RecordingSession extends EventTarget {
@@ -35,6 +41,11 @@ export class RecordingSession extends EventTarget {
   private releaseLock: (() => void) | null = null;
   private releaseOriginals: (() => void) | null = null;
   private stopping: Promise<void> | null = null;
+  private preparation: Promise<void> | null = null;
+  private active = false;
+  private stopRequested = false;
+  private timing: CaptureWindow | null = null;
+  private readonly mediaStarts = new Map<string, number>();
   private issues: string[] = [];
   private statusTimer: ReturnType<typeof setInterval> | null = null;
   private startedAtMs = performance.now();
@@ -83,8 +94,18 @@ export class RecordingSession extends EventTarget {
   private publish() {
     this.dispatchEvent(new Event("change"));
   }
-  async start() {
-    this.startedAtMs = performance.now();
+  prepare(): Promise<void> {
+    const operation = (this.preparation ??= this.initialize());
+    return operation.catch(async (error) => {
+      await this.stop();
+      throw error;
+    });
+  }
+  private checkOpen() {
+    if (this.stopRequested)
+      throw new DOMException("Aufnahmevorbereitung abgebrochen.", "AbortError");
+  }
+  private async initialize() {
     if (!this.sources.length)
       throw new Error("Keine Aufnahmequellen ausgewählt.");
     await new Promise<void>((resolve, reject) => {
@@ -109,22 +130,45 @@ export class RecordingSession extends EventTarget {
         )
         .catch(reject);
     });
+    this.checkOpen();
+    this.releaseOriginals = await holdOriginals(this.meta);
+    this.checkOpen();
+    await storageDeadline(
+      () => this.store.initialize(this.meta),
+      "Aufnahmemetadaten vorbereiten",
+      30_000,
+    );
+    this.checkOpen();
+    const context = await this.capture.audioContext();
+    await context.audioWorklet.addModule(pcmWorkletUrl);
+    if (this.sources.some((source) => source.kind === "audio"))
+      await prepareAudioClock(context);
+    this.checkOpen();
+    for (const source of this.sources) {
+      if (source.track.readyState !== "live")
+        throw new Error(`${source.label}: Gerät nicht verfügbar.`);
+      this.runners.push(this.createRunner(source, context));
+    }
+    this.capture.addEventListener("ended", this.ended);
+    await Promise.all(this.runners.map((r) => r.ready));
+    this.checkOpen();
+    const failed = this.status.sources.find((s) => s.error);
+    if (failed) throw new Error(`${failed.label}: ${failed.error}`);
+  }
+  async start(expectedStartMs?: number) {
+    await this.prepare();
+    this.checkOpen();
+    if (this.active) return;
+    for (const source of this.sources)
+      if (source.track.readyState !== "live")
+        throw new Error(`${source.label}: Gerät nicht verfügbar.`);
+    const failed = this.status.sources.find((s) => s.error);
+    if (failed) throw new Error(`${failed.label}: ${failed.error}`);
+    this.active = true;
+    this.startedAtMs = expectedStartMs ?? performance.now();
+    this.timing = { startMs: this.startedAtMs, stopMs: this.startedAtMs };
     try {
-      this.releaseOriginals = await holdOriginals(this.meta);
-      await this.store.initialize(this.meta);
-      const context = await this.capture.audioContext();
-      await context.audioWorklet.addModule(pcmWorkletUrl);
-      if (this.sources.some((source) => source.kind === "audio"))
-        await prepareAudioClock(context);
-      for (const source of this.sources) {
-        if (source.track.readyState !== "live")
-          throw new Error(`${source.label}: Gerät nicht verfügbar.`);
-        this.runners.push(this.createRunner(source, context));
-      }
-      this.capture.addEventListener("ended", this.ended);
-      await Promise.all(this.runners.map((r) => r.ready));
-      const failed = this.status.sources.find((s) => s.error);
-      if (failed) throw new Error(`${failed.label}: ${failed.error}`);
+      this.runners.forEach((r) => r.activate());
       this.statusTimer = setInterval(() => {
         this.publish();
         if (performance.now() - this.lastClockAt >= 10_000) {
@@ -300,8 +344,17 @@ export class RecordingSession extends EventTarget {
       type: string;
       status: SourceStatus;
       metrics?: RecorderPerformance;
+      localStartMs?: number;
     }>) => {
       if (done) return;
+      if (data.type === "media-start") {
+        if (
+          typeof data.localStartMs === "number" &&
+          Number.isFinite(data.localStartMs)
+        )
+          this.mediaStarts.set(source.id, data.localStartMs);
+        return;
+      }
       if (data.type === "performance") {
         if (data.metrics) {
           const previous = this.performance.get(source.id);
@@ -323,23 +376,7 @@ export class RecordingSession extends EventTarget {
           worker.postMessage({ type: "stop" });
           return;
         }
-        try {
-          processor = new MediaStreamTrackProcessor({
-            track: source.track,
-            maxBufferSize: 3,
-          });
-          worker.postMessage(
-            { type: "capture", readable: processor.readable },
-            [processor.readable],
-          );
-          markReady();
-        } catch (error) {
-          rejectReady(
-            error instanceof Error ? error : new Error(String(error)),
-          );
-          forcedError = String(error);
-          worker.postMessage({ type: "stop" });
-        }
+        markReady();
         return;
       }
       if (forcedError) {
@@ -390,6 +427,7 @@ export class RecordingSession extends EventTarget {
       recording: this.meta,
       track,
       mainTimeOrigin: performance.timeOrigin,
+      deferredStart: true,
     };
     const transfers: Transferable[] = [];
     try {
@@ -416,9 +454,10 @@ export class RecordingSession extends EventTarget {
         };
         transfers.push(channel.port1);
         worker.postMessage(message, transfers);
-        node.port.postMessage({ type: "connect", port: channel.port2 }, [
-          channel.port2,
-        ]);
+        node.port.postMessage(
+          { type: "connect", port: channel.port2, deferredStart: true },
+          [channel.port2],
+        );
       } else {
         worker.postMessage(message);
       }
@@ -432,10 +471,27 @@ export class RecordingSession extends EventTarget {
       worker,
       finished,
       ready: prepared,
+      activate: () => {
+        if (node) node.port.postMessage({ type: "start" });
+        else {
+          processor = new MediaStreamTrackProcessor({
+            track: source.track,
+            maxBufferSize: 3,
+          });
+          worker.postMessage(
+            { type: "capture", readable: processor.readable },
+            [processor.readable],
+          );
+        }
+      },
       stop: (reason) => {
         if (done || stopRequested) return;
         stopRequested = true;
         forcedError = reason;
+        if (!ready)
+          rejectReady(
+            new DOMException("Aufnahmevorbereitung abgebrochen.", "AbortError"),
+          );
         maximumTimeout = setTimeout(expire, FINALIZE_MAX_MS);
         progress();
         if (node) node.port.postMessage({ type: "stop" });
@@ -465,7 +521,13 @@ export class RecordingSession extends EventTarget {
       this.issues.push(`Metadaten: ${String(error).slice(0, 480)}`);
     this.dispatchEvent(new CustomEvent("error", { detail: String(error) }));
   }
-  stop(): Promise<void> {
+  stop(expectedStopMs = performance.now()): Promise<void> {
+    if (!this.stopRequested) {
+      this.stopRequested = true;
+      if (this.timing)
+        this.timing.stopMs = Math.max(this.timing.startMs, expectedStopMs);
+      this.runners.forEach((r) => r.stop());
+    }
     return (this.stopping ??= this.finalize());
   }
   private async finalize() {
@@ -473,10 +535,37 @@ export class RecordingSession extends EventTarget {
     this.capture.removeEventListener("ended", this.ended);
     this.status.state = "finalizing";
     this.publish();
-    this.runners.forEach((r) => r.stop());
+    await this.preparation?.catch(() => undefined);
     const sources = await Promise.all(this.runners.map((r) => r.finished));
     await Promise.all([...this.metadataJobs]);
     this.status.sources = sources;
+    if (!this.active)
+      this.issues.push("Aufnahme wurde vor dem Start abgebrochen.");
+    if (this.timing)
+      for (const source of sources) {
+        const startMs = this.mediaStarts.get(source.trackId);
+        const capture = this.sources.find((s) => s.id === source.trackId);
+        const issue = coverageIssue(
+          {
+            label: source.label,
+            startMs,
+            endMs:
+              startMs === undefined
+                ? undefined
+                : startMs + source.capturedSeconds * 1000,
+            savedMs: source.savedSeconds * 1000,
+            frameRate: capture?.track.getSettings().frameRate,
+          },
+          this.timing,
+        );
+        if (issue) {
+          this.issues.push(issue);
+          source.state = "partial";
+          source.error = (
+            source.error ? `${source.error} · ${issue}` : issue
+          ).slice(0, 300);
+        }
+      }
     this.status.state =
       !this.issues.length &&
       sources.length === this.sources.length &&
@@ -491,6 +580,7 @@ export class RecordingSession extends EventTarget {
         finishedAt: new Date().toISOString(),
         sources,
         issues: this.issues,
+        ...(this.timing ? { timing: this.timing } : {}),
       });
     } catch (error) {
       this.status.state = "partial";

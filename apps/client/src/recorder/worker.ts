@@ -24,6 +24,7 @@ export type Init = {
   readable?: ReadableStream<VideoFrame>;
   port?: MessagePort;
   audioAnchor?: { contextTime: number; localMs: number };
+  deferredStart?: boolean;
 };
 export type RecorderPerformance = {
   queuedBytes: number;
@@ -52,6 +53,7 @@ let sequence = 0,
   peakQueuedBytes = 0,
   savedThroughSeconds = 0,
   initialized: Promise<void> | null = null;
+let trackPrepared: Promise<void>;
 let connectStream: ((stream: ReadableStream<VideoFrame>) => void) | undefined;
 const localNow = () =>
   performance.timeOrigin + performance.now() - init.mainTimeOrigin;
@@ -114,8 +116,9 @@ function enqueue(bytes: number, fn: () => Promise<void>) {
 function ensureInitialized(localStartMs: number) {
   if (!initialized) {
     init.track.localStartMs = localStartMs;
-    initialized = store
-      .initializeTrack(init.recording, init.track)
+    host.postMessage({ type: "media-start", localStartMs });
+    initialized = trackPrepared
+      .then(() => store.startTrack(init.recording, init.track))
       .then(() => diagnostic("track-initialized"));
   }
   return initialized;
@@ -272,14 +275,21 @@ async function video() {
   status.warning = prepared.warning;
   init.track.settings.encoderAccelerationPreference =
     prepared.hardwareAcceleration;
+  await trackPrepared;
   // Do not attach a camera while this worker is loading/initializing its codec.
   // Otherwise a stale buffered first frame creates an artificial start gap.
   const readable =
     init.readable ??
-    (await new Promise<ReadableStream<VideoFrame>>((resolve) => {
-      connectStream = resolve;
-      host.postMessage({ type: "capture-ready" });
-    }));
+    (stopping
+      ? new ReadableStream<VideoFrame>({
+          start(controller) {
+            controller.close();
+          },
+        })
+      : await new Promise<ReadableStream<VideoFrame>>((resolve) => {
+          connectStream = resolve;
+          host.postMessage({ type: "capture-ready" });
+        }));
   reader = readable.getReader();
   diagnostic("reader-ready");
   let origin: number | null = null,
@@ -481,7 +491,14 @@ function audio() {
       );
   };
   port.start();
-  host.postMessage({ type: "ready" });
+  void trackPrepared
+    .then(() => {
+      if (!stopping) host.postMessage({ type: "ready" });
+    })
+    .catch(async (error) => {
+      fail(error);
+      await finished();
+    });
 }
 host.onmessage = ({
   data,
@@ -529,6 +546,8 @@ host.onmessage = ({
     segments: 0,
   };
   notify();
+  trackPrepared = store.prepareTrack(init.recording, init.track);
+  void trackPrepared.catch(() => undefined);
   if (init.track.kind === "audio") audio();
   else
     void video().catch(async (error) => {

@@ -255,7 +255,12 @@ describe("coordinator over real WebSockets", () => {
     expect(await guest.wait((m) => m.type === "peer.signal")).toMatchObject({
       candidate: null,
     });
-    host.send({ type: "record.ready", recordingId: "bad", ready: true });
+    host.send({
+      type: "record.ready",
+      recordingId: "bad",
+      ready: true,
+      prepared: true,
+    });
     expect(await host.wait((m) => m.type === "error")).toMatchObject({
       code: "invalid_message",
     });
@@ -294,11 +299,13 @@ describe("coordinator over real WebSockets", () => {
       type: "record.ready",
       recordingId: prepare.take.id,
       ready: true,
+      prepared: true,
     });
     guest.send({
       type: "record.ready",
       recordingId: prepare.take.id,
       ready: true,
+      prepared: true,
     });
     expect(await host.wait((m) => m.type === "record.start")).toMatchObject({
       take: { phase: "recording" },
@@ -382,7 +389,12 @@ describe("coordinator over real WebSockets", () => {
     const recordingId = prepare.take.id;
     expect(prepare.take.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     for (const peer of [host, guest])
-      peer.send({ type: "record.ready", recordingId, ready: true });
+      peer.send({
+        type: "record.ready",
+        recordingId,
+        ready: true,
+        prepared: true,
+      });
     await host.wait((m) => m.type === "record.start");
     const status = (state: "recording" | "saved") => ({
       type: "record.status",
@@ -592,11 +604,13 @@ describe("coordinator over real WebSockets", () => {
       type: "record.ready",
       recordingId: prepare.take.id,
       ready: true,
+      prepared: true,
     });
     guest.send({
       type: "record.ready",
       recordingId: prepare.take.id,
       ready: true,
+      prepared: true,
     });
     const start = await guest.wait((m) => m.type === "record.start");
     expect(

@@ -14,6 +14,10 @@ import {
   type SessionManifest,
   type TrackMeta,
 } from "../../../../packages/protocol/src/index.js";
+import {
+  coverageIssue,
+  inventoryCoverage,
+} from "../../../../packages/protocol/src/coverage.js";
 import { LOCAL_RETENTION_MS, takePath } from "./layout.js";
 import { storageDeadline } from "./deadline.js";
 
@@ -778,7 +782,7 @@ export class LocalStore {
       this.options.onWriteProgress,
     );
   }
-  async initializeTrack(recording: RecordingMeta, track: TrackMeta) {
+  async prepareTrack(recording: RecordingMeta, track: TrackMeta) {
     trackMetaSchema.parse(track);
     const base = await this.participant(
       recording.recordingId,
@@ -801,13 +805,30 @@ export class LocalStore {
       },
       this.options.onWriteProgress,
     );
+    await directory(dir, [track.epochId], true, this.writerDirectories);
+    await this.clock(recording, track.clock);
+  }
+  async startTrack(recording: RecordingMeta, track: TrackMeta) {
+    trackMetaSchema.parse(track);
+    const base = await this.participant(
+      recording.recordingId,
+      recording.participantId,
+    );
     await writeJson(
-      await directory(dir, [track.epochId], true, this.writerDirectories),
+      await directory(
+        base,
+        ["tracks", track.trackId, track.epochId],
+        false,
+        this.writerDirectories,
+      ),
       "epoch.json",
       track,
       this.options.onWriteProgress,
     );
-    await this.clock(recording, track.clock);
+  }
+  async initializeTrack(recording: RecordingMeta, track: TrackMeta) {
+    await this.prepareTrack(recording, track);
+    await this.startTrack(recording, track);
   }
   async clock(recording: RecordingMeta, mapping: ClockMapping) {
     const base = await this.participant(
@@ -1289,6 +1310,14 @@ export class LocalStore {
       )
         throw new Error("Abschluss passt nicht zur Aufnahme.");
       result.issues.push(...(completion.issues ?? []));
+      result.coverageVerified = !!completion.timing;
+      if (completion.timing) {
+        for (const media of inventoryCoverage(result)) {
+          const issue = coverageIssue(media, completion.timing);
+          if (issue && !result.issues.includes(issue))
+            result.issues.push(issue);
+        }
+      }
       for (const trackId of recording.trackIds) {
         const source = completion.sources.find((s) => s.trackId === trackId);
         const segments = result.segments.filter((s) => s.trackId === trackId);

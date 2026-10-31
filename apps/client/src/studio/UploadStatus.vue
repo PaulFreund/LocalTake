@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CloudUpload, Check } from "@lucide/vue";
+import { CloudUpload, Check, TriangleAlert } from "@lucide/vue";
 import {
   DialogRoot,
   DialogPortal,
@@ -14,6 +14,10 @@ import { act, bytes, studio } from "./state";
 
 // Functions, not computeds: they read the runtime on every render, see state.ts.
 const session = () => studio.value.currentSession;
+const incomplete = () =>
+  session()?.participants.some((p) => ["partial", "failed"].includes(p.state));
+const unverified = () =>
+  session()?.participants.some((p) => p.state === "unverified");
 // A guest sends everything still pending in this room; the host shows how much
 // of the current session has arrived.
 const progress = () => {
@@ -33,7 +37,11 @@ const title = () =>
       ? studio.value.isDestination
         ? "Originale der Gäste werden gesammelt"
         : `Originale werden an ${studio.value.archiveDestination?.name || "den Host"} gesendet`
-      : "Alle Originale sind gesichert";
+      : incomplete()
+        ? "Aufnahme unvollständig – vorhandene Originale sind übertragen"
+        : unverified()
+          ? "Übertragung abgeschlossen – Aufnahmedauer ungeprüft"
+          : "Alle Originale sind gesichert";
 const visible = () => {
   const s = studio.value;
   if (s.uploadPending) return true;
@@ -68,8 +76,13 @@ const updateOpen = (value: boolean) => {
         aria-hidden="true"
       />
       <Check
-        v-else
+        v-else-if="!incomplete() && !unverified()"
         class="size-4 shrink-0 text-emerald-500"
+        aria-hidden="true"
+      />
+      <TriangleAlert
+        v-else
+        class="size-4 shrink-0 text-amber-500"
         aria-hidden="true"
       />
       <span class="min-w-0 flex-1">

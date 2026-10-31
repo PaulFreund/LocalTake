@@ -50,8 +50,18 @@ const segments = () =>
       </CardDescription>
       <CardAction>
         <StatusBadge
-          :label="inventory.complete ? 'Verifiziert' : 'Teilbestand'"
-          :tone="inventory.complete ? 'good' : 'warning'"
+          :label="
+            !inventory.complete
+              ? 'Teilbestand'
+              : inventory.coverageVerified
+                ? 'Verifiziert'
+                : 'Aufnahmedauer ungeprüft'
+          "
+          :tone="
+            inventory.complete && inventory.coverageVerified
+              ? 'good'
+              : 'warning'
+          "
         />
       </CardAction>
     </CardHeader>

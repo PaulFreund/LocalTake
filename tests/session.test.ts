@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { RecordingSession } from "../apps/client/src/recorder/session.js";
 import type {
   CaptureManager,
@@ -6,6 +6,15 @@ import type {
 } from "../apps/client/src/capture/manager.js";
 import type { LocalStore } from "../apps/client/src/storage/store.js";
 import type { SessionClock } from "../apps/client/src/core/clock.js";
+
+beforeEach(() =>
+  vi.stubGlobal(
+    "MediaStreamTrackProcessor",
+    class {
+      readable = new ReadableStream();
+    },
+  ),
+);
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -211,18 +220,22 @@ it("waits for pending session metadata before writing the completion used by aut
   expect(store.event).toHaveBeenCalledOnce();
 });
 
-async function finalizationFixture() {
+async function finalizationFixture(activate = true) {
   vi.useFakeTimers();
   let worker!: FakeWorker;
   class FakeWorker {
     onmessage?: (event: any) => void;
     terminated = false;
+    messages: string[] = [];
     constructor() {
       worker = this;
     }
     postMessage(message: any) {
+      this.messages.push(message.type);
       if (message.type === "init")
         queueMicrotask(() => this.emit({ type: "ready" }));
+      if (message.type === "capture")
+        this.emit({ type: "media-start", localStartMs: performance.now() });
     }
     emit(data: unknown) {
       this.onmessage?.({ data });
@@ -268,7 +281,8 @@ async function finalizationFixture() {
     "Test",
     "720",
   );
-  await session.start();
+  if (activate) await session.start();
+  else await session.prepare();
   const status = (segments: number, state = "finalizing") => ({
     trackId: source.id,
     label: source.label,
@@ -341,6 +355,73 @@ it("does not let unchanged worker heartbeats extend a stalled native write", asy
   expect(f.session.performance.get(f.source.id)).toEqual(frozen);
   expect(f.store.finish).toHaveBeenCalledOnce();
 });
+
+it("prepares once and captures only after activation, without repeating storage initialization", async () => {
+  const f = await finalizationFixture(false);
+  expect(f.worker.messages).toEqual(["init"]);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(f.worker.messages).toEqual(["init"]);
+  await f.session.start();
+  expect(f.worker.messages).toEqual(["init", "capture"]);
+  expect(f.store.initialize).toHaveBeenCalledOnce();
+  const stopped = f.session.stop();
+  f.worker.emit({
+    type: "finished",
+    status: { ...f.status(1, "saved"), capturedSeconds: 2 },
+  });
+  await stopped;
+  expect(f.session.status.state).toBe("saved");
+});
+it("cancels a prepared recorder without ever attaching a capture stream", async () => {
+  const f = await finalizationFixture(false);
+  const stopped = f.session.stop();
+  f.worker.emit({
+    type: "finished",
+    status: { ...f.status(0, "failed"), capturedSeconds: 0 },
+  });
+  await stopped;
+  await expect(f.session.start()).rejects.toMatchObject({ name: "AbortError" });
+  expect(f.worker.messages).not.toContain("capture");
+  expect(f.worker.terminated).toBe(true);
+  expect(f.session.status.state).toBe("partial");
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(["late-start", "early-end"])(
+  "persists a %s as partial even when the worker certifies its existing bytes",
+  async (problem) => {
+    const f = await finalizationFixture();
+    const started = performance.now();
+    await vi.advanceTimersByTimeAsync(4000);
+    if (problem === "late-start")
+      f.worker.emit({ type: "media-start", localStartMs: started + 3900 });
+    const stopped = f.session.stop();
+    f.worker.emit({
+      type: "finished",
+      status: {
+        ...f.status(1, "saved"),
+        savedSeconds: problem === "late-start" ? 0.033333 : 1,
+        capturedSeconds: problem === "late-start" ? 0.033333 : 1,
+      },
+    });
+    await stopped;
+    expect(f.session.status.state).toBe("partial");
+    expect(f.session.status.sources[0].error).toContain(
+      "Aufnahme unvollständig",
+    );
+    expect(f.store.finish).toHaveBeenCalledWith(
+      f.session.meta,
+      expect.objectContaining({
+        timing: expect.objectContaining({
+          startMs: started,
+          stopMs: started + 4000,
+        }),
+        sources: [expect.objectContaining({ state: "partial" })],
+        issues: [expect.stringContaining("Aufnahme unvollständig")],
+      }),
+    );
+  },
+);
 
 it("enforces the two-minute overall limit even if I/O keeps changing", async () => {
   const f = await finalizationFixture();

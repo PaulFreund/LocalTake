@@ -17,6 +17,9 @@ use tokio::{
 };
 use uuid::Uuid;
 
+// Native folder checks and codec preparation must finish before the shared start.
+const PREPARE_TIMEOUT_SECS: u64 = 180;
+
 #[derive(Clone)]
 pub struct Config {
     pub secret: String,
@@ -64,7 +67,7 @@ mod tests {
         )
         .unwrap();
         tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::time::advance(Duration::from_secs(PREPARE_TIMEOUT_SECS)).await;
         tokio::task::yield_now().await;
         {
             let rooms = app.rooms.lock().unwrap();
@@ -96,6 +99,94 @@ mod tests {
             Some("Host: Disk")
         );
         assert!(rooms[&room_id].timer.is_none());
+        drop(rooms);
+        app.handle(
+            &identity,
+            json!({"type":"record.prepare","commandId":Uuid::new_v4().to_string()}),
+            0.0,
+        )
+        .unwrap();
+        let id = app.rooms.lock().unwrap()[&room_id]
+            .take
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
+        app.handle(
+            &identity,
+            json!({"type":"record.ready","recordingId":id,"ready":true}),
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(
+            app.rooms.lock().unwrap()[&room_id]
+                .take
+                .as_ref()
+                .unwrap()
+                .phase,
+            "cancelled"
+        );
+        assert!(
+            app.rooms.lock().unwrap()[&room_id]
+                .take
+                .as_ref()
+                .unwrap()
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("neu öffnen")
+        );
+        app.handle(
+            &identity,
+            json!({"type":"record.prepare","commandId":Uuid::new_v4().to_string()}),
+            0.0,
+        )
+        .unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(20)).await;
+        tokio::task::yield_now().await;
+        let id = app.rooms.lock().unwrap()[&room_id]
+            .take
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
+        assert_eq!(
+            app.rooms.lock().unwrap()[&room_id]
+                .take
+                .as_ref()
+                .unwrap()
+                .phase,
+            "preparing"
+        );
+        app.handle(
+            &identity,
+            json!({"type":"record.ready","recordingId":id,"ready":true,"prepared":true}),
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(
+            app.rooms.lock().unwrap()[&room_id]
+                .take
+                .as_ref()
+                .unwrap()
+                .phase,
+            "recording"
+        );
+        app.handle(
+            &identity,
+            json!({"type":"record.stop","recordingId":id,"commandId":Uuid::new_v4().to_string()}),
+            0.0,
+        )
+        .unwrap();
+        assert!(
+            app.rooms.lock().unwrap()[&room_id]
+                .take
+                .as_ref()
+                .unwrap()
+                .stop_at
+                .is_some()
+        );
     }
     #[tokio::test]
     async fn room_and_command_caps_expire_inactive_state() {
@@ -630,12 +721,13 @@ impl Coordinator {
                         .collect(),
                     ready: Vec::new(),
                     start_at: None,
+                    stop_at: None,
                     reason: None,
                 });
                 let room_id = room.id.clone();
                 let weak = Arc::downgrade(self);
                 let timer = tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    tokio::time::sleep(Duration::from_secs(PREPARE_TIMEOUT_SECS)).await;
                     if let Some(app) = weak.upgrade() {
                         let mut rooms = app.rooms.lock().unwrap();
                         if let Some(room) = rooms.get_mut(&room_id)
@@ -678,6 +770,16 @@ impl Coordinator {
                     self.publish(room);
                     return Ok(());
                 }
+                if message["prepared"] != true {
+                    take.phase = "cancelled";
+                    take.reason = Some(format!(
+                        "{}: Bitte alle LocalTake-Tabs schließen und neu öffnen. Diese Version bestätigt noch keinen vorbereiteten Recorder.",
+                        room.members[index].peer.name
+                    ));
+                    room.clear_timer();
+                    self.publish(room);
+                    return Ok(());
+                }
                 if !take.ready.contains(&identity.participant_id) {
                     take.ready.push(identity.participant_id.clone());
                 }
@@ -709,9 +811,15 @@ impl Coordinator {
                     take.phase = "cancelled";
                 } else if take.phase == "recording" {
                     take.phase = "stopping";
+                    take.stop_at = Some(self.clock());
                 }
+                let stop_at = take.stop_at;
                 room.settle();
-                room.broadcast(json!({"type": "record.stop", "recordingId": message["recordingId"], "commandId": message["commandId"]}));
+                let mut stopped = json!({"type": "record.stop", "recordingId": message["recordingId"], "commandId": message["commandId"]});
+                if let Some(at) = stop_at {
+                    stopped["stopAt"] = json!(at);
+                }
+                room.broadcast(stopped);
                 self.publish(room);
             }
             "record.status" => {

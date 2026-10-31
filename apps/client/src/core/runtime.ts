@@ -18,6 +18,7 @@ import {
   type BrowserStorageStatus,
 } from "../storage/selection.js";
 import { RecordingSession } from "../recorder/session.js";
+import { takeCoverage } from "../../../../packages/protocol/src/coverage.js";
 // Keep export code with the loaded release, including in long-lived tabs.
 import { exportSession } from "../export/exporter.js";
 import { RoomClient } from "../room/client.js";
@@ -153,6 +154,9 @@ export class StudioRuntime extends EventTarget {
   private started = new Set<string>();
   private wakeLock: WakeLockSentinel | null = null;
   private initializing: Promise<void> | null = null;
+  private preparedRecording: RecordingSession | null = null;
+  private preparationRevision = 0;
+  private preparingTakeId: string | null = null;
   private stoppingLocal: Promise<void> | null = null;
   private storageRevision = 0;
   private checkRevision = 0;
@@ -1582,11 +1586,16 @@ export class StudioRuntime extends EventTarget {
       const take = message.state.take;
       // A participant that was offline when the host stopped still records.
       if (
-        this.recording &&
-        take?.id === this.recording.meta.recordingId &&
+        take &&
+        (take.id === this.recording?.meta.recordingId ||
+          take.id === this.preparingTakeId) &&
         ["stopping", "done", "cancelled"].includes(take.phase)
       )
-        void this.stopLocal().catch((error) => this.report(error));
+        void this.stopLocal(
+          take.stopAt === undefined
+            ? undefined
+            : this.room.clock.serverToLocal(take.stopAt),
+        ).catch((error) => this.report(error));
       this.adoptRoomQuality(message.state);
       this.recordManifest(message.state);
       if (
@@ -1606,18 +1615,45 @@ export class StudioRuntime extends EventTarget {
       this.changed();
     }
     if (message.type === "record.prepare") {
+      const revision = ++this.preparationRevision;
+      this.preparingTakeId = message.take.id;
+      this.diagnostics.record("recorder", "prepare.started", {
+        recordingId: message.take.id,
+      });
       try {
         if (!this.armed)
           throw new Error("Lokale Aufnahme ist nicht freigegeben.");
         await this.stopProbe();
+        if (revision !== this.preparationRevision) return;
         this.validate();
-        await this.store!.preflight();
+        this.pendingStart = true;
+        this.changed();
+        const operation = (async () => {
+          await this.store!.preflight();
+          if (revision !== this.preparationRevision) return;
+          const session = this.newRecording(message.take.id);
+          this.preparedRecording = session;
+          await session.prepare();
+        })();
+        this.initializing = operation;
+        await operation;
+        if (revision !== this.preparationRevision) return;
+        this.diagnostics.record("recorder", "prepare.ready", {
+          recordingId: message.take.id,
+        });
         this.room.send({
           type: "record.ready",
           recordingId: message.take.id,
           ready: true,
+          prepared: true,
         });
       } catch (error) {
+        if (revision !== this.preparationRevision) return;
+        const prepared = this.preparedRecording;
+        this.preparedRecording = null;
+        await prepared?.stop().catch(() => undefined);
+        this.pendingStart = false;
+        this.preparingTakeId = null;
         this.armed = false;
         this.probePassed = false;
         this.storageWritable = false;
@@ -1632,23 +1668,24 @@ export class StudioRuntime extends EventTarget {
           reason: String(error).slice(0, 200),
         });
         this.report(error);
+      } finally {
+        if (revision === this.preparationRevision) this.initializing = null;
       }
     }
     if (message.type === "record.start" && !this.started.has(message.take.id)) {
       this.started.add(message.take.id);
       this.pendingStart = true;
       this.changed();
+      const expectedStartMs = this.room.clock.serverToLocal(
+        message.take.startAt!,
+      );
       const delay = Math.max(
         0,
-        Math.min(
-          2000,
-          this.room.clock.serverToLocal(message.take.startAt!) -
-            performance.now(),
-        ),
+        Math.min(2000, expectedStartMs - performance.now()),
       );
       this.startTimer = setTimeout(() => {
         this.pendingStart = false;
-        void this.start(message.take.id).catch((error) => {
+        void this.start(message.take.id, expectedStartMs).catch((error) => {
           this.armed = false;
           this.probePassed = false;
           this.readinessError =
@@ -1676,13 +1713,17 @@ export class StudioRuntime extends EventTarget {
         (this.pendingStart &&
           this.room.state?.take?.id === message.recordingId))
     )
-      await this.stopLocal();
+      await this.stopLocal(
+        message.stopAt === undefined
+          ? undefined
+          : this.room.clock.serverToLocal(message.stopAt),
+      );
     if (
       message.type === "room.state" &&
       message.state.take?.phase === "cancelled"
     ) {
       clearTimeout(this.startTimer);
-      this.pendingStart = false;
+      await this.stopLocal();
       this.notice =
         message.state.take.reason || "Aufnahmevorbereitung abgebrochen.";
       this.changed();
@@ -1709,6 +1750,9 @@ export class StudioRuntime extends EventTarget {
       recordingId: take.id,
       roomId: state.roomId,
       roomName: state.name,
+      ...(take.startAt !== undefined && take.stopAt !== undefined
+        ? { durationMs: Math.max(0, take.stopAt - take.startAt) }
+        : {}),
       startedAt:
         previous?.startedAt ?? take.createdAt ?? new Date().toISOString(),
       participants: take.participants.map((id) => {
@@ -1728,7 +1772,8 @@ export class StudioRuntime extends EventTarget {
       }),
     };
     // Rewrite only for new participants or final states, not every progress tick.
-    const key = JSON.stringify(
+    const key = JSON.stringify([
+      manifest.durationMs,
       manifest.participants.map((p) => [
         p.id,
         p.name,
@@ -1736,7 +1781,7 @@ export class StudioRuntime extends EventTarget {
           ? [p.state, p.bytes]
           : null,
       ]),
-    );
+    ]);
     if (this.manifestKeys.get(take.id) === key) return;
     this.manifestKeys.set(take.id, key);
     this.manifests = [
@@ -1760,12 +1805,13 @@ export class StudioRuntime extends EventTarget {
       /* best effort; never represented as recording safety */
     }
   }
-  async start(recordingId: string) {
-    await this.stopProbe();
+  async start(recordingId: string, expectedStartMs?: number) {
+    if (this.preparedRecording?.meta.recordingId !== recordingId)
+      await this.stopProbe();
     this.validate();
     this.pendingStart = true;
     this.changed();
-    const operation = this.begin(recordingId);
+    const operation = this.begin(recordingId, expectedStartMs);
     this.initializing = operation;
     try {
       await operation;
@@ -1783,9 +1829,8 @@ export class StudioRuntime extends EventTarget {
       this.changed();
     }
   }
-  private async begin(recordingId: string) {
-    await this.store!.preflight();
-    const session = new RecordingSession(
+  private newRecording(recordingId: string) {
+    return new RecordingSession(
       this.store!,
       this.capture,
       this.room.clock,
@@ -1805,11 +1850,23 @@ export class StudioRuntime extends EventTarget {
         purpose: "recording",
       },
     );
+  }
+  private async begin(recordingId: string, expectedStartMs?: number) {
+    const prepared =
+      this.preparedRecording?.meta.recordingId === recordingId
+        ? this.preparedRecording
+        : null;
+    if (!prepared) await this.store!.preflight();
+    const session = prepared ?? this.newRecording(recordingId);
+    this.preparedRecording = null;
+    this.preparingTakeId = null;
     this.recording = session;
     this.diagnostics.record("recorder", "starting", {
       recordingId,
       sources: session.meta.trackIds,
       quality: this.quality,
+      prepared: !!prepared,
+      expectedStartMs,
     });
     this.armed = false;
     this.publishPresence();
@@ -1829,7 +1886,7 @@ export class StudioRuntime extends EventTarget {
       this.report((event as CustomEvent).detail),
     );
     try {
-      await session.start();
+      await session.start(expectedStartMs);
       this.diagnostics.record("recorder", "started", { recordingId });
       await this.wake();
     } catch (error) {
@@ -1852,9 +1909,9 @@ export class StudioRuntime extends EventTarget {
       throw error;
     }
   }
-  async stopLocal() {
+  async stopLocal(expectedStopMs?: number) {
     if (this.stoppingLocal) return this.stoppingLocal;
-    const operation = this.finalizeLocal();
+    const operation = this.finalizeLocal(expectedStopMs);
     this.stoppingLocal = operation;
     try {
       await operation;
@@ -1862,16 +1919,24 @@ export class StudioRuntime extends EventTarget {
       this.stoppingLocal = null;
     }
   }
-  private async finalizeLocal() {
+  private async finalizeLocal(expectedStopMs = performance.now()) {
     clearTimeout(this.startTimer);
+    this.preparationRevision++;
+    this.preparingTakeId = null;
+    const prepared = this.preparedRecording;
+    this.preparedRecording = null;
+    const cancelled = prepared?.stop();
+    const initializing = this.initializing;
+    await initializing?.catch(() => undefined);
+    if (this.initializing === initializing) this.initializing = null;
+    await cancelled?.catch(() => undefined);
     this.pendingStart = false;
-    await this.initializing?.catch(() => undefined);
     const session = this.recording;
     if (session) {
       this.diagnostics.record("recorder", "stopping", {
         recordingId: session.meta.recordingId,
       });
-      await session.stop();
+      await session.stop(expectedStopMs);
       this.diagnostics.record("recorder", "finished", session.status);
       this.lastRecording = session;
       this.recording = null;
@@ -1912,7 +1977,18 @@ export class StudioRuntime extends EventTarget {
       const library = await store.list();
       const manifests = await store.sessions();
       if (this.store === store) {
-        this.library = library;
+        const takes = new Map<string, StoredInventory[]>();
+        for (const inventory of library) {
+          const id = inventory.recording.recordingId;
+          if (!takes.has(id)) takes.set(id, []);
+          takes.get(id)!.push(inventory);
+        }
+        this.library = [...takes].flatMap(([id, items]) =>
+          takeCoverage(
+            items,
+            manifests.find((m) => m.recordingId === id)?.durationMs,
+          ),
+        );
         if (
           this.isDestination &&
           library.some(

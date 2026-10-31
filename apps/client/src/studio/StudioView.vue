@@ -67,6 +67,14 @@ const active = computed(
 const blocked = computed(() => {
   return studio.value.startBlocked;
 });
+const lastState = () => {
+  const s = studio.value;
+  const state = s.currentSession?.participants.find((p) => p.self)?.state;
+  return s.currentSession?.id === s.lastRecording?.meta.recordingId &&
+    (state === "partial" || state === "unverified")
+    ? state
+    : s.lastRecording?.status.state || "";
+};
 const failedSources = computed(
   () => studio.value.recording?.status.sources.filter((s) => s.error) || [],
 );
@@ -259,7 +267,11 @@ const pill =
           aria-hidden="true"
         />
         <span class="font-mono text-sm tabular-nums">{{
-          duration(studio.recording?.elapsedSeconds ?? progress.captured)
+          duration(
+            studio.pendingStart
+              ? 0
+              : (studio.recording?.elapsedSeconds ?? progress.captured),
+          )
         }}</span>
         <span
           v-if="studio.recording"
@@ -273,12 +285,16 @@ const pill =
         <span
           v-else-if="studio.pendingStart"
           class="text-xs text-muted-foreground"
-          >Startet …</span
+          >{{
+            studio.room.state?.take?.phase === "preparing"
+              ? "Vorbereitung läuft …"
+              : "Gemeinsamer Start …"
+          }}</span
         >
         <StatusBadge
           v-else-if="studio.lastRecording"
-          :label="statusLabel(studio.lastRecording.status.state)"
-          :tone="statusTone(studio.lastRecording.status.state)"
+          :label="statusLabel(lastState())"
+          :tone="statusTone(lastState())"
         />
       </div>
       <div

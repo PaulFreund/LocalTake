@@ -6,6 +6,7 @@ import type {
 } from "../../../../packages/protocol/src/index.js";
 import type { Transfer } from "../transfer/manager.js";
 import type { SyncItem } from "../transfer/sync.js";
+import { takeCoverage } from "../../../../packages/protocol/src/coverage.js";
 
 // A session is one take: from pressing record until stop, in one room. The
 // receiving host (master) sees every participant and how much of their originals
@@ -19,8 +20,15 @@ export type ParticipantState =
   | "done"
   | "local"
   | "partial"
+  | "unverified"
   | "failed";
-const SETTLED: ParticipantState[] = ["done", "local", "partial", "failed"];
+const SETTLED: ParticipantState[] = [
+  "done",
+  "local",
+  "partial",
+  "unverified",
+  "failed",
+];
 export type ParticipantProgress = {
   id: string;
   name: string;
@@ -111,10 +119,17 @@ export function buildSessions(input: SessionInputs): SessionView[] {
 }
 
 function buildSession(id: string, input: SessionInputs): SessionView {
-  const recordings = input.library.filter(
+  const available = input.library.filter(
     (i) => i.recording.recordingId === id && i.recording.purpose !== "check",
   );
   const manifest = input.manifests.find((m) => m.recordingId === id);
+  const expectedMs = Math.max(
+    manifest?.durationMs ?? 0,
+    ...(input.room?.peers ?? [])
+      .filter((p) => p.recording?.recordingId === id)
+      .flatMap((p) => p.recording!.sources.map((s) => s.savedSeconds * 1000)),
+  );
+  const recordings = takeCoverage(available, expectedMs);
   const local = input.local.find((l) => l.recordingId === id);
   const take = input.room?.take?.id === id ? input.room.take : null;
   const roomId =
@@ -227,9 +242,16 @@ function participant(
     inventory
       ? {
           ...base,
-          state: inventory.complete ? complete : "partial",
+          state: !inventory.complete
+            ? "partial"
+            : inventory.coverageVerified
+              ? complete
+              : "unverified",
           bytes: have,
           total: have,
+          ...(!inventory.complete
+            ? { detail: inventory.issues.slice(0, 3).join(" · ") }
+            : {}),
         }
       : live && live.state !== "failed"
         ? // Saved locally; the archive scan has not listed it yet.
@@ -276,7 +298,11 @@ function participant(
   if (!inventory && transfer?.state === "done")
     return {
       ...base,
-      state: "done",
+      state:
+        transfer.completeRecording &&
+        (live?.state ?? entry?.state) !== "partial"
+          ? "unverified"
+          : "partial",
       bytes: transfer.total,
       total: transfer.total,
     };

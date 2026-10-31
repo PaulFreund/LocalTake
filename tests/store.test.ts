@@ -176,6 +176,41 @@ function fixture(cacheDirectories = false) {
   return { root, store, recording, track, info, bytes };
 }
 describe("local recording durability contract", () => {
+  it("independently rejects a late short original even if completion calls every source saved", async () => {
+    const f = fixture();
+    f.track.localStartMs = 3910;
+    const info = { ...f.info, mediaDurationUs: 33333, sampleCount: 1600 };
+    await f.store.initialize(f.recording);
+    await f.store.initializeTrack(f.recording, f.track);
+    await f.store.commit(f.recording, f.track, info, f.bytes);
+    await f.store.finish(f.recording, {
+      formatVersion: 1,
+      recordingId: f.recording.recordingId,
+      participantId: f.recording.participantId,
+      finishedAt: new Date().toISOString(),
+      sources: [
+        {
+          trackId: f.track.trackId,
+          label: f.track.label,
+          kind: "audio",
+          state: "saved",
+          savedSeconds: 0.033333,
+          capturedSeconds: 0.033333,
+          bytes: f.bytes.byteLength,
+          segments: 1,
+        },
+      ],
+      timing: { startMs: 10, stopMs: 4010 },
+      issues: [],
+    });
+    const scanned = await f.store.scan(
+      f.recording.recordingId,
+      f.recording.participantId,
+    );
+    expect(scanned.complete).toBe(false);
+    expect(scanned.issues.join(" ")).toContain("Aufnahme unvollständig");
+    expect(scanned.segments).toHaveLength(1);
+  });
   it("reuses writer directories across segments and still verifies fresh file contents", async () => {
     const f = fixture(true);
     await f.store.initialize(f.recording);
