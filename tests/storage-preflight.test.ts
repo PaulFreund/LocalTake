@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout as waitForIO } from "node:timers/promises";
 import {
   LocalStore,
   type StorageCheckProgress,
@@ -12,7 +12,10 @@ afterEach(() => {
 });
 
 async function until(check: () => boolean) {
-  for (let i = 0; i < 200 && !check(); i++) await setImmediate();
+  // Crypto/file promises use real I/O even when the storage deadlines are fake.
+  // A fixed number of immediate turns can elapse before I/O runs under load.
+  const deadline = Date.now() + 2000;
+  while (!check() && Date.now() < deadline) await waitForIO(1);
   expect(check()).toBe(true);
 }
 

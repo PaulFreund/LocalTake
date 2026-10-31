@@ -19,4 +19,19 @@ describe("session clock", () => {
     clock.accept(4990, 100, 101, 5011, "new");
     expect(clock.toSession(5000)).toBeCloseTo(before, 5);
   });
+  it("stores the same server reference for a surviving page and a new page after restart", () => {
+    const surviving = new SessionClock();
+    surviving.accept(1000, 1510, 1511, 1021, "old");
+    surviving.accept(4990, 100, 101, 5011, "new");
+    const reopened = new SessionClock();
+    reopened.accept(2990, 100, 101, 3011, "new");
+    const oldPage = JSON.parse(JSON.stringify(surviving.snapshot(5000)));
+    const newPage = JSON.parse(JSON.stringify(reopened.snapshot(3000)));
+    expect(oldPage.epoch).toBe("new");
+    expect(newPage.epoch).toBe("new");
+    expect(oldPage.localMs + oldPage.offsetMs).toBeCloseTo(100, 5);
+    expect(newPage.localMs + newPage.offsetMs).toBeCloseTo(100, 5);
+    expect(surviving.serverToLocal(100)).toBeCloseTo(5000, 5);
+    expect(reopened.serverToLocal(100)).toBeCloseTo(3000, 5);
+  });
 });

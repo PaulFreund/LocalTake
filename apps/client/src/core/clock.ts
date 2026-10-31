@@ -77,7 +77,10 @@ export class SessionClock {
     };
   }
   snapshot(now = performance.now()): ClockMapping {
-    return this.fit(now);
+    const mapping = this.fit(now);
+    // Persist the actual server-epoch reference. The page's continuity offset
+    // is only for its internal timeline; a freshly opened peer does not have it.
+    return { ...mapping, offsetMs: mapping.offsetMs - this.continuityOffset };
   }
   toSession(local: number): number {
     const m = this.last;

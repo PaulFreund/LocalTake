@@ -100,6 +100,8 @@ Der isolierte Edge-Test verwendete den Produktionsbuild mit den unveränderten C
 
 Eine weitere Integration entfernt den Abschlussbeleg eines bereits segmentweise gesicherten Takes, öffnet die Ablage neu, überträgt den unvollständigen Bestand automatisch und exportiert ihn beim Empfänger. Segmentbelege, Spurmetadaten, Medienstartposition, lokale Startposition und Clock-Abbildung bleiben identisch; der Export bleibt korrekt unvollständig und die ursprünglichen Teilsegmente bleiben erhalten. Zusammen bestehen 17 Rust- und 236 Vitest-Tests in 26 Vitest-Dateien. Die Dokumentation stellt ausdrücklich klar, dass Neuladen kein garantiertes Finalisieren und Metadaten kein automatischer Timeline-Import ins Schnittprogramm sind.
 
+Die Zeitprüfung fand zusätzlich einen Unterschied zwischen einem Tab, der einen Koordinatorneustart überlebt, und einem frisch geöffneten Tab: Die interne Zeitfortsetzung des ersten Tabs wurde bisher als Teil seines gespeicherten Offsets ausgegeben, obwohl die Epoche bereits den neuen Koordinator bezeichnete. `snapshot()` zieht diesen internen Versatz jetzt ab. Ein zusätzlicher Vergleichstest prüft identische Serverzeiten der gespeicherten Abbildungen bei unterschiedlichen lokalen Zeitursprüngen; der bestehende Test für die interne Kontinuität und die Startzeitumrechnung bleibt erhalten. Damit bestehen 17 Rust- und 237 Vitest-Tests. Vorhandene Aufnahmen werden nicht rückwirkend umgeschrieben; ungeprüfte Hardwarelatenzen und automatischer Timeline-Import bleiben offene Punkte.
+
 ## Offene Systemabnahme
 
 Die folgenden Nachweise erfordern die tatsächliche Zielumgebung:
