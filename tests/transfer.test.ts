@@ -174,6 +174,79 @@ async function fixture() {
   };
 }
 describe("P2P file protocol", () => {
+  it("recovers an interrupted take and transfers its verified media and timing metadata", async () => {
+    const f = await fixture();
+    const participant = await f.source.participant(
+      f.inventory.recording.recordingId,
+      f.senderId,
+    );
+    // A reload can leave committed segments without the final completion.
+    await participant.removeEntry("completion.json");
+    const reopened = new LocalStore(f.source.root);
+    const recovered = (await reopened.list())[0];
+    expect(recovered.complete).toBe(false);
+    expect(recovered.segments).toEqual(f.inventory.segments);
+    expect(recovered.tracks).toEqual(f.inventory.tracks);
+    const context = {
+      roomId: recovered.recording.roomId,
+      selfId: f.senderId,
+      destinationId: f.receiverId,
+      store: reopened,
+      library: [recovered],
+      canWork: true,
+      destinationReady: true,
+    };
+    const sender = new AutomaticSync(f.sender, () => context);
+    const receiver = new AutomaticSync(f.receiver, () => ({
+      ...context,
+      selfId: f.receiverId,
+      store: f.target,
+      library: [],
+    }));
+    await sender.refresh();
+    await sender.tick();
+    await waitFor(() =>
+      expect([...f.receiver.transfers.values()][0]?.state).toBe("offered"),
+    );
+    await receiver.tick();
+    await waitFor(() =>
+      expect(sender.status).toMatchObject({ pending: 0, state: "done" }),
+    );
+    const received = (await f.target.list())[0];
+    expect(received.complete).toBe(false);
+    expect(received.segments).toEqual(recovered.segments);
+    expect(received.tracks).toEqual(recovered.tracks);
+    const folder = await exportSession(
+      f.target,
+      [received],
+      f.target.root,
+      () => {},
+      true,
+    );
+    const metadata = await folder.getDirectoryHandle("metadata");
+    const timeline = JSON.parse(
+      await (
+        await (
+          await metadata.getFileHandle(`${f.senderId}.timeline.json`)
+        ).getFile()
+      ).text(),
+    );
+    expect(timeline.complete).toBe(false);
+    expect(timeline.tracks).toEqual(recovered.tracks);
+    expect(timeline.outputs).toEqual([
+      expect.objectContaining({
+        mediaStartUs: 0,
+        localStartMs: 10,
+        durationUs: 2_000_000,
+      }),
+    ]);
+    const clock = recovered.tracks[0].clock;
+    expect(timeline.auxiliary).toContainEqual({
+      path: `clocks/${clock.id}.json`,
+      data: clock,
+    });
+    expect((await reopened.list())[0].segments).toEqual(recovered.segments);
+  });
   it("automatically collects originals once both peers are online and remembers completion in the source folder", async () => {
     const f = await fixture();
     let destinationReady = false;

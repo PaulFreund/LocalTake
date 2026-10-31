@@ -1,4 +1,5 @@
 import pcmWorkletUrl from "./pcm-worklet.js?url";
+import RecorderWorker from "./worker.ts?worker&inline";
 import {
   profiles,
   type CaptureManager,
@@ -174,9 +175,9 @@ export class RecordingSession extends EventTarget {
             : "first-frame arrival estimate; capture latency uncalibrated",
       },
     };
-    const worker = new Worker(new URL("./worker.ts", import.meta.url), {
-      type: "module",
-    });
+    // A long-lived tab must retain the recorder of its own release. Loading a
+    // hashed worker URL only at record time fails after that release is removed.
+    const worker = new RecorderWorker();
     let node: AudioWorkletNode | undefined,
       input: MediaStreamAudioSourceNode | undefined,
       silent: GainNode | undefined,

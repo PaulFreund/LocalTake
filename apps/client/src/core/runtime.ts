@@ -18,6 +18,8 @@ import {
   type BrowserStorageStatus,
 } from "../storage/selection.js";
 import { RecordingSession } from "../recorder/session.js";
+// Keep export code with the loaded release, including in long-lived tabs.
+import { exportSession } from "../export/exporter.js";
 import { RoomClient } from "../room/client.js";
 import { reconnectedRecordingStatus } from "../room/recovery.js";
 import { LiveMesh } from "../live/mesh.js";
@@ -1985,7 +1987,6 @@ export class StudioRuntime extends EventTarget {
     this.busy = "Sitzungsordner fertigstellen …";
     this.changed();
     try {
-      const { exportSession } = await import("../export/exporter.js");
       const groups = new Map<string, Inventory[]>();
       for (const inventory of inventories) {
         const id = inventory.recording.recordingId;
