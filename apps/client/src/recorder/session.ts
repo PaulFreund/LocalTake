@@ -16,6 +16,9 @@ import type {
 } from "../../../../packages/protocol/src/index.js";
 import type { Init, RecorderPerformance } from "./worker.js";
 
+const FINALIZE_IDLE_MS = 30_000;
+const FINALIZE_MAX_MS = 120_000;
+
 type Runner = {
   sourceId: string;
   worker: Worker;
@@ -185,6 +188,7 @@ export class RecordingSession extends EventTarget {
       processor: MediaStreamTrackProcessor | undefined;
     let resolveFinished: (status: SourceStatus) => void;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let maximumTimeout: ReturnType<typeof setTimeout> | undefined;
     let readyTimeout: ReturnType<typeof setTimeout> | undefined;
     let resolveReady: () => void;
     let rejectReady: (error: Error) => void;
@@ -211,9 +215,22 @@ export class RecordingSession extends EventTarget {
     let done = false,
       stopRequested = false,
       forcedError: string | undefined;
-    const cleanup = () => {
+    const clearDeadline = () => {
       clearTimeout(timeout);
+      clearTimeout(maximumTimeout);
+    };
+    const cleanup = () => {
+      clearDeadline();
       clearTimeout(readyTimeout);
+      const metrics = this.performance.get(source.id);
+      if (
+        metrics?.ioStartedAtMs !== undefined &&
+        metrics.ioEndedAtMs === undefined
+      )
+        this.performance.set(source.id, {
+          ...metrics,
+          ioEndedAtMs: performance.now(),
+        });
       input?.disconnect();
       node?.disconnect();
       silent?.disconnect();
@@ -230,6 +247,12 @@ export class RecordingSession extends EventTarget {
       const index = this.status.sources.findIndex(
         (s) => s.trackId === status.trackId,
       );
+      const previous = this.status.sources[index];
+      if (
+        status.bytes > (previous?.bytes || 0) ||
+        status.segments > (previous?.segments || 0)
+      )
+        progress();
       if (index < 0) this.status.sources.push(status);
       else this.status.sources[index] = status;
       if (status.error && !this.reportedErrors.has(status.trackId)) {
@@ -242,6 +265,35 @@ export class RecordingSession extends EventTarget {
       }
       this.publish();
     };
+    const expire = () => {
+      if (done) return;
+      done = true;
+      const current = this.status.sources.find((s) => s.trackId === source.id);
+      const failed: SourceStatus = {
+        trackId: source.id,
+        label: source.label,
+        kind: source.kind,
+        savedSeconds: 0,
+        capturedSeconds: 0,
+        bytes: 0,
+        segments: 0,
+        ...current,
+        state: "partial",
+        error:
+          "Abschlusszeit überschritten. Bestand über Wiederherstellung prüfen.",
+      };
+      update(failed);
+      cleanup();
+      resolveFinished(failed);
+    };
+    // A slow native provider may need more than 30s for all queued segments.
+    // Extend only for actual I/O transitions or verified segments, never a
+    // repeated heartbeat. A separate hard limit still bounds a busy/retrying worker.
+    const progress = () => {
+      if (!stopRequested || done) return;
+      clearTimeout(timeout);
+      timeout = setTimeout(expire, FINALIZE_IDLE_MS);
+    };
     worker.onmessage = ({
       data,
     }: MessageEvent<{
@@ -251,7 +303,15 @@ export class RecordingSession extends EventTarget {
     }>) => {
       if (done) return;
       if (data.type === "performance") {
-        if (data.metrics) this.performance.set(source.id, data.metrics);
+        if (data.metrics) {
+          const previous = this.performance.get(source.id);
+          if (
+            previous?.ioStage !== data.metrics.ioStage ||
+            previous?.ioStartedAtMs !== data.metrics.ioStartedAtMs
+          )
+            progress();
+          this.performance.set(source.id, data.metrics);
+        }
         return;
       }
       if (data.type === "ready") {
@@ -295,7 +355,7 @@ export class RecordingSession extends EventTarget {
             ),
           );
         done = true;
-        clearTimeout(timeout);
+        clearDeadline();
         resolveFinished(data.status);
       }
     };
@@ -319,7 +379,7 @@ export class RecordingSession extends EventTarget {
         error: event.message || "Recorder-Worker beendet.",
       };
       done = true;
-      clearTimeout(timeout);
+      clearDeadline();
       update(failed);
       resolveFinished(failed);
     };
@@ -376,30 +436,10 @@ export class RecordingSession extends EventTarget {
         if (done || stopRequested) return;
         stopRequested = true;
         forcedError = reason;
+        maximumTimeout = setTimeout(expire, FINALIZE_MAX_MS);
+        progress();
         if (node) node.port.postMessage({ type: "stop" });
         else worker.postMessage({ type: "stop" });
-        timeout = setTimeout(() => {
-          done = true;
-          const current = this.status.sources.find(
-            (s) => s.trackId === source.id,
-          );
-          const failed: SourceStatus = {
-            trackId: source.id,
-            label: source.label,
-            kind: source.kind,
-            savedSeconds: 0,
-            capturedSeconds: 0,
-            bytes: 0,
-            segments: 0,
-            ...current,
-            state: "partial",
-            error:
-              "Abschlusszeit überschritten. Bestand über Wiederherstellung prüfen.",
-          };
-          update(failed);
-          cleanup();
-          resolveFinished(failed);
-        }, 30_000);
       },
       cleanup,
     };

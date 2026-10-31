@@ -31,6 +31,8 @@ export type RecorderPerformance = {
   savedBehindSeconds: number;
   ioStage?: string;
   ioStartedAtMs?: number;
+  // Filled by the session when terminating a worker with an outstanding I/O step.
+  ioEndedAtMs?: number;
 };
 type WorkerHost = {
   postMessage(message: unknown): void;

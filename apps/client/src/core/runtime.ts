@@ -1143,7 +1143,10 @@ export class StudioRuntime extends EventTarget {
                 ? undefined
                 : Math.max(
                     0,
-                    Math.round(performance.now() - metrics.ioStartedAtMs),
+                    Math.round(
+                      (metrics.ioEndedAtMs ?? performance.now()) -
+                        metrics.ioStartedAtMs,
+                    ),
                   ),
           },
         ]),
