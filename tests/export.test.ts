@@ -764,6 +764,46 @@ describe("original export", () => {
       ),
     ).toEqual([]);
   });
+  it("finishes a verified export while retaining originals if native cleanup failed", async () => {
+    const f = await fixture();
+    f.store.noteCleanupFailure(
+      new DOMException("Deletion denied", "NotAllowedError"),
+    );
+    const folder = await exportSession(
+      f.store,
+      [f.inventory],
+      f.handle,
+      () => {},
+      true,
+    );
+    const files = await Array.fromAsync(folder.values());
+    expect(files.some((file) => file.name.endsWith(".mp4"))).toBe(true);
+    expect(files.some((file) => file.name.endsWith(".wav"))).toBe(true);
+    expect(
+      (await f.store.catalogs()).every((catalog) => catalog.inventory.complete),
+    ).toBe(true);
+    expect(
+      (
+        await f.store.scan(
+          f.inventory.recording.recordingId,
+          f.inventory.recording.participantId,
+        )
+      ).complete,
+    ).toBe(true);
+    // Periodic retention must not try the same unresponsive provider either.
+    expect(await f.store.housekeeping(Date.now() + 8 * 24 * 60 * 60_000)).toBe(
+      false,
+    );
+    expect(
+      (
+        await f.store.scan(
+          f.inventory.recording.recordingId,
+          f.inventory.recording.participantId,
+        )
+      ).complete,
+    ).toBe(true);
+    expect(await f.store.list()).toHaveLength(1);
+  });
   it("does not clear local originals when a cutter file cannot be finalized", async () => {
     const f = await fixture();
     const room = await f.handle.getDirectoryHandle("Lokale-Aufnahmen", {

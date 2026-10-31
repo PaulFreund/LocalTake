@@ -120,7 +120,14 @@ export type StorageCheckProgress = {
   status: "started" | "finished" | "failed";
   stepMs: number;
   totalMs: number;
+  check?: 1 | 2;
 };
+// Stores for the same selected handle share failures of optional cleanup.
+// Do not keep issuing deletes to a native provider that stopped responding.
+const cleanupStates = new WeakMap<
+  FileSystemDirectoryHandle,
+  { error: string }
+>();
 const encoder = new TextEncoder();
 // Chromium maps generic OS file errors to these names. On Windows they mostly
 // mean another process (virus scanner, indexer, cloud sync) briefly holds the
@@ -319,6 +326,20 @@ export async function inventoryFingerprint(inventory: Inventory) {
   );
 }
 export class LocalStore {
+  private readonly cleanupState: { error: string };
+  get cleanupError() {
+    return this.cleanupState.error;
+  }
+  get cleanupWarning() {
+    return this.cleanupError
+      ? "Testdateien konnten nicht entfernt werden. Automatisches Aufräumen ist pausiert; Testdaten unter „temp“ und bereits übertragene Originale bleiben lokal erhalten. Bitte bei Bedarf manuell aufräumen."
+      : "";
+  }
+  noteCleanupFailure(error: unknown) {
+    this.cleanupState.error = (
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    ).slice(0, 1000);
+  }
   readonly scanIssues: string[] = [];
   // Device checks that a crash left behind; hidden from the archive.
   readonly leftoverChecks: { recordingId: string; createdAt: string }[] = [];
@@ -328,7 +349,14 @@ export class LocalStore {
   constructor(
     readonly root: FileSystemDirectoryHandle,
     readonly area: "local" | "temp" = "local",
-  ) {}
+  ) {
+    let state = cleanupStates.get(root);
+    if (!state) {
+      state = { error: "" };
+      cleanupStates.set(root, state);
+    }
+    this.cleanupState = state;
+  }
   async preflight(
     onProgress?: (stage: string, progress: StorageCheckProgress) => void,
   ): Promise<void> {
@@ -341,193 +369,222 @@ export class LocalStore {
     let stage = "Schreibfreigabe prüfen";
     const started = performance.now();
     let cancelled: unknown;
-    await storageDeadline(
-      async (signal) => {
-        const active = () => {
-          signal.throwIfAborted();
-          if (cancelled) throw cancelled;
-        };
-        const step = async <T>(
-          label: string,
-          operation: (signal: AbortSignal) => Promise<T>,
-        ) => {
-          active();
-          stage = label;
-          const stepStarted = performance.now();
-          const report = (status: StorageCheckProgress["status"]) => {
-            if (!signal.aborted && !cancelled)
-              onProgress?.(label, {
-                status,
-                stepMs: Math.round(performance.now() - stepStarted),
-                totalMs: Math.round(performance.now() - started),
-              });
+    let base: FileSystemDirectoryHandle | undefined;
+    let verified = false;
+    try {
+      await storageDeadline(
+        async (signal) => {
+          let pathCheck: 1 | 2 | undefined;
+          const active = () => {
+            signal.throwIfAborted();
+            if (cancelled) throw cancelled;
           };
+          const step = async <T>(
+            label: string,
+            operation: (signal: AbortSignal) => Promise<T>,
+          ) => {
+            active();
+            stage = label;
+            const stepStarted = performance.now();
+            const report = (status: StorageCheckProgress["status"]) => {
+              if (!signal.aborted && !cancelled)
+                onProgress?.(label, {
+                  status,
+                  stepMs: Math.round(performance.now() - stepStarted),
+                  totalMs: Math.round(performance.now() - started),
+                  check: pathCheck,
+                });
+            };
+            report("started");
+            try {
+              const result = await storageDeadline(
+                operation,
+                `Schreibprüfung für „${this.root.name}“ (${label})`,
+                15_000,
+                signal,
+              );
+              report("finished");
+              return result;
+            } catch (error) {
+              report("failed");
+              if (
+                signal.aborted ||
+                (error as Error)?.name === "StorageTimeoutError"
+              )
+                cancelled = error;
+              throw error;
+            }
+          };
+          const folder = async (
+            root: FileSystemDirectoryHandle,
+            parts: string[],
+          ) => {
+            let current = root;
+            for (const part of parts) {
+              const parent = current;
+              current = await step("Prüfordner anlegen", () =>
+                retrying(() => {
+                  active();
+                  return parent.getDirectoryHandle(part, { create: true });
+                }, "Prüfordner anlegen"),
+              );
+            }
+            return current;
+          };
+          const writeProbe = async (
+            dir: FileSystemDirectoryHandle,
+            name: string,
+          ) => {
+            const bytes = encoder.encode(
+              JSON.stringify({ check: "localtake-write-read", at: Date.now() }),
+            ).buffer;
+            await retrying(async () => {
+              const file = await step("Prüfdatei anlegen", () =>
+                dir.getFileHandle(name, { create: true }),
+              );
+              const writable = await step("Schreibstream öffnen", () =>
+                file.createWritable(),
+              );
+              let closed = false;
+              try {
+                await step("Prüfdatei schreiben", () => writable.write(bytes));
+                await step("Prüfdatei schließen", () => writable.close());
+                closed = true;
+              } finally {
+                if (!closed) void writable.abort().catch(() => undefined);
+              }
+              const savedHandle = await step("Prüfdatei zurücklesen", () =>
+                dir.getFileHandle(name),
+              );
+              const saved = await step("Prüfdatei zurücklesen", () =>
+                savedHandle.getFile(),
+              );
+              if (saved.size !== bytes.byteLength)
+                throw new Error(
+                  "Die Größe der zurückgelesenen Prüfdatei stimmt nicht.",
+                );
+              const actual = await step("Prüfdatei zurücklesen", () =>
+                saved.arrayBuffer(),
+              );
+              if ((await sha256(actual)) !== (await sha256(bytes)))
+                throw new Error(
+                  "Die zurückgelesene Prüfdatei stimmt nicht mit den geschriebenen Daten überein.",
+                );
+            }, "Prüfdatei schreiben und lesen");
+          };
+          try {
+            const locks =
+              typeof navigator === "undefined" ? undefined : navigator.locks;
+            if (typeof isSecureContext !== "undefined" && !locks)
+              throw new Error(
+                "Sicherer Dateizugriff benötigt die Web Locks API.",
+              );
+            if (locks)
+              await step("Dateisperre prüfen", (lockSignal) =>
+                locks.request(
+                  `localtake-probe-${probe}`,
+                  { signal: lockSignal },
+                  async () => {},
+                ),
+              );
+            if (
+              this.root.queryPermission &&
+              (await step("Schreibfreigabe prüfen", () =>
+                this.root.queryPermission({ mode: "readwrite" }),
+              )) !== "granted"
+            )
+              throw new Error(
+                `Speicherordner „${this.root.name}“ ist nicht freigegeben. Bitte „Ordner freigeben“ bestätigen.`,
+              );
+            base = await folder(this.root, ["temp"]);
+            pathCheck = 1;
+            const dir = await folder(base, [
+              probe,
+              crypto.randomUUID(),
+              "tracks",
+              crypto.randomUUID(),
+              crypto.randomUUID(),
+            ]);
+            await writeProbe(dir, "000000_000000000000us.segment.json");
+            pathCheck = 2;
+            const receipts = await folder(base, [
+              probe,
+              crypto.randomUUID(),
+              "metadata",
+              "transfers",
+            ]);
+            await writeProbe(
+              receipts,
+              `${crypto.randomUUID()}-${"0".repeat(64)}.json`,
+            );
+          } catch (error) {
+            if (
+              (error as Error)?.name === "StorageTimeoutError" ||
+              signal.aborted
+            )
+              throw error;
+            const hint =
+              typeof navigator !== "undefined" &&
+              /Windows/.test(navigator.userAgent)
+                ? " Unter Windows kann der Pfad zu lang sein; bitte einen kurzen Basispfad wie C:\\LocalTake wählen."
+                : " Bitte die Zugriffsrechte prüfen oder einen anderen Ordner im internen Speicher wählen.";
+            throw new Error(
+              `Schreibprüfung für „${this.root.name}“ fehlgeschlagen (${stage}): ${error instanceof Error ? error.message : String(error)}.${hint}`,
+              { cause: error },
+            );
+          }
+          signal.throwIfAborted();
+          verified = true;
+        },
+        () =>
+          `Gesamte Schreibprüfung für „${this.root.name}“ (zuletzt: ${stage})`,
+        90_000,
+      );
+    } finally {
+      if (base && !this.cleanupError) {
+        const probeRoot = base;
+        const label = "Prüfdateien entfernen";
+        const cleanupStarted = performance.now();
+        const report = (status: StorageCheckProgress["status"]) => {
+          // A failed write must keep its original stage and error. Optional
+          // cleanup cannot replace it or update the UI after failure.
+          if (verified)
+            onProgress?.(label, {
+              status,
+              stepMs: Math.round(performance.now() - cleanupStarted),
+              totalMs: Math.round(performance.now() - started),
+            });
+        };
+        const cleanup = async () => {
           report("started");
           try {
-            const result = await storageDeadline(
-              operation,
-              `Schreibprüfung für „${this.root.name}“ (${label})`,
-              15_000,
-              signal,
+            await storageDeadline(
+              (signal) =>
+                retrying(async () => {
+                  signal.throwIfAborted();
+                  try {
+                    // Only this check's unique probe can be deleted.
+                    await probeRoot.removeEntry(probe, { recursive: true });
+                  } catch (error) {
+                    if ((error as DOMException).name !== "NotFoundError")
+                      throw error;
+                  }
+                }, `Aufräumen von ${probe}`),
+              `Aufräumen für „${this.root.name}“ (${label})`,
             );
             report("finished");
-            return result;
           } catch (error) {
+            this.noteCleanupFailure(error);
             report("failed");
-            if (
-              signal.aborted ||
-              (error as Error)?.name === "StorageTimeoutError"
-            )
-              cancelled = error;
-            throw error;
           }
         };
-        const folder = async (
-          root: FileSystemDirectoryHandle,
-          parts: string[],
-        ) => {
-          let current = root;
-          for (const part of parts) {
-            const parent = current;
-            current = await step("Prüfordner anlegen", () =>
-              retrying(() => {
-                active();
-                return parent.getDirectoryHandle(part, { create: true });
-              }, "Prüfordner anlegen"),
-            );
-          }
-          return current;
-        };
-        const writeProbe = async (
-          dir: FileSystemDirectoryHandle,
-          name: string,
-        ) => {
-          const bytes = encoder.encode(
-            JSON.stringify({ check: "localtake-write-read", at: Date.now() }),
-          ).buffer;
-          await retrying(async () => {
-            const file = await step("Prüfdatei anlegen", () =>
-              dir.getFileHandle(name, { create: true }),
-            );
-            const writable = await step("Schreibstream öffnen", () =>
-              file.createWritable(),
-            );
-            let closed = false;
-            try {
-              await step("Prüfdatei schreiben", () => writable.write(bytes));
-              await step("Prüfdatei schließen", () => writable.close());
-              closed = true;
-            } finally {
-              if (!closed) void writable.abort().catch(() => undefined);
-            }
-            const savedHandle = await step("Prüfdatei zurücklesen", () =>
-              dir.getFileHandle(name),
-            );
-            const saved = await step("Prüfdatei zurücklesen", () =>
-              savedHandle.getFile(),
-            );
-            if (saved.size !== bytes.byteLength)
-              throw new Error(
-                "Die Größe der zurückgelesenen Prüfdatei stimmt nicht.",
-              );
-            const actual = await step("Prüfdatei zurücklesen", () =>
-              saved.arrayBuffer(),
-            );
-            if ((await sha256(actual)) !== (await sha256(bytes)))
-              throw new Error(
-                "Die zurückgelesene Prüfdatei stimmt nicht mit den geschriebenen Daten überein.",
-              );
-          }, "Prüfdatei schreiben und lesen");
-        };
-        let base: FileSystemDirectoryHandle | undefined;
-        try {
-          const locks =
-            typeof navigator === "undefined" ? undefined : navigator.locks;
-          if (typeof isSecureContext !== "undefined" && !locks)
-            throw new Error(
-              "Sicherer Dateizugriff benötigt die Web Locks API.",
-            );
-          if (locks)
-            await step("Dateisperre prüfen", (lockSignal) =>
-              locks.request(
-                `localtake-probe-${probe}`,
-                { signal: lockSignal },
-                async () => {},
-              ),
-            );
-          if (
-            this.root.queryPermission &&
-            (await step("Schreibfreigabe prüfen", () =>
-              this.root.queryPermission({ mode: "readwrite" }),
-            )) !== "granted"
-          )
-            throw new Error(
-              `Speicherordner „${this.root.name}“ ist nicht freigegeben. Bitte „Ordner freigeben“ bestätigen.`,
-            );
-          base = await folder(this.root, ["temp"]);
-          const dir = await folder(base, [
-            probe,
-            crypto.randomUUID(),
-            "tracks",
-            crypto.randomUUID(),
-            crypto.randomUUID(),
-          ]);
-          await writeProbe(dir, "000000_000000000000us.segment.json");
-          const receipts = await folder(base, [
-            probe,
-            crypto.randomUUID(),
-            "metadata",
-            "transfers",
-          ]);
-          await writeProbe(
-            receipts,
-            `${crypto.randomUUID()}-${"0".repeat(64)}.json`,
-          );
-        } catch (error) {
-          if (
-            (error as Error)?.name === "StorageTimeoutError" ||
-            signal.aborted
-          )
-            throw error;
-          const hint =
-            typeof navigator !== "undefined" &&
-            /Windows/.test(navigator.userAgent)
-              ? " Unter Windows kann der Pfad zu lang sein; bitte einen kurzen Basispfad wie C:\\LocalTake wählen."
-              : " Bitte die Zugriffsrechte prüfen oder einen anderen Ordner im internen Speicher wählen.";
-          throw new Error(
-            `Schreibprüfung für „${this.root.name}“ fehlgeschlagen (${stage}): ${error instanceof Error ? error.message : String(error)}.${hint}`,
-            { cause: error },
-          );
-        } finally {
-          if (base) {
-            const probeRoot = base;
-            // Only this uniquely named probe is removed. A late browser response
-            // cannot activate the store or continue with another probe operation.
-            const cleanup = () =>
-              retrying(
-                () => probeRoot.removeEntry(probe, { recursive: true }),
-                `Aufräumen von ${probe}`,
-              ).catch((error) => {
-                if ((error as DOMException).name !== "NotFoundError")
-                  throw error;
-              });
-            if (signal.aborted || cancelled) {
-              // A failed native call must not hide its error behind another
-              // stalled operation. Cleanup only this probe, with its own bound.
-              void storageDeadline(cleanup, "Prüfdateien entfernen").catch(
-                () => undefined,
-              );
-            } else {
-              await step("Prüfdateien entfernen", cleanup);
-            }
-          }
-        }
-        signal.throwIfAborted();
-      },
-      () =>
-        `Gesamte Schreibprüfung für „${this.root.name}“ (zuletzt: ${stage})`,
-      90_000,
-    );
+        // Close and byte/hash readback are required. Removing a successfully
+        // verified probe is optional and has its own 15-second budget. A write
+        // failure is returned immediately, even if cleanup also fails or stalls.
+        if (verified) await cleanup();
+        else void cleanup();
+      }
+    }
   }
   // Device checks are recorded like real takes (same path length) and removed
   // afterwards. Only folders whose every participant is marked as a check go.
@@ -1281,6 +1338,7 @@ export class LocalStore {
     return result;
   }
   async removeOriginals(inventory: Inventory) {
+    if (this.cleanupError) return;
     await whenUnused(inventory.recording, async () => {
       const current = await this.scan(
         inventory.recording.recordingId,
@@ -1331,7 +1389,7 @@ export class LocalStore {
   }
 
   async housekeeping(now = Date.now()) {
-    if (this.area !== "local") return false;
+    if (this.area !== "local" || this.cleanupError) return false;
     let changed = await this.migrateLegacy();
     for (const area of ["temp", "local"] as const) {
       let base: FileSystemDirectoryHandle;

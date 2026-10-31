@@ -144,6 +144,13 @@ const tabClass =
         <DiagnosticsPanel />
       </header>
       <UploadStatus />
+      <p
+        v-if="studio.store?.cleanupWarning"
+        role="status"
+        class="shrink-0 border-b bg-muted/50 px-4 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+      >
+        {{ studio.store.cleanupWarning }}
+      </p>
       <div
         v-if="studio.error"
         role="alert"

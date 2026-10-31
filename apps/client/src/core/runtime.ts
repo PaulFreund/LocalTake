@@ -6,6 +6,7 @@ import {
   type StoredInventory,
 } from "../storage/store.js";
 import { LOCAL_RETENTION_MS } from "../storage/layout.js";
+import { storageDeadline } from "../storage/deadline.js";
 import {
   BROWSER_STORAGE_ENABLED,
   savedStorage,
@@ -154,6 +155,7 @@ export class StudioRuntime extends EventTarget {
   private storageRevision = 0;
   private checkRevision = 0;
   private nextCheckAt = 0;
+  private cleanupLimitedProbeRevision = -1;
   private probeOperation: Promise<void> | null = null;
   private cancelProbeDelay: (() => void) | null = null;
   private presenceSent = "";
@@ -385,6 +387,7 @@ export class StudioRuntime extends EventTarget {
         sourceErrors: this.sourceErrors,
         storageKind: this.storageKind,
         storageWritable: this.storageWritable,
+        storageCleanupError: this.store?.cleanupError || "",
         audioContextState: this.capture.context?.state,
         sources: this.sources.map((source) => ({
           id: source.id,
@@ -926,10 +929,15 @@ export class StudioRuntime extends EventTarget {
           ...progress,
         });
         if (progress.status === "started") {
-          current = stage;
+          current = progress.check
+            ? `${stage} (Test ${progress.check}/2)`
+            : stage;
           stepStarted = performance.now();
           show();
         }
+      });
+      this.diagnostics.record("storage", "check.verified", {
+        cleanupError: store.cleanupError,
       });
     } catch (error) {
       this.diagnostics.record("storage", "check.failed", {
@@ -1141,16 +1149,25 @@ export class StudioRuntime extends EventTarget {
       await session?.stop().catch(() => undefined);
       this.cancelProbeDelay = null;
       // Only this check's own folder, created under a fresh id, is deleted.
-      if (started)
+      if (started && !store.cleanupError)
         try {
-          await store.removeCheck(checkId, false);
+          await storageDeadline(
+            () => store.removeCheck(checkId, false),
+            "Prüfaufnahme entfernen",
+          );
         } catch (error) {
-          if ((error as DOMException).name !== "NotFoundError") {
-            this.probePassed = false;
-            this.armed = false;
-            this.readinessError = `Prüfdateien konnten nicht aufgeräumt werden: ${String(error)}`;
-          }
+          if ((error as DOMException).name !== "NotFoundError")
+            store.noteCleanupFailure(error);
         }
+      if (store.cleanupError) {
+        // A successful media check stays ready. Without working deletion, do
+        // not accumulate another six-second recording on every periodic check
+        // or retry. A source/storage change explicitly invalidates this check.
+        this.cleanupLimitedProbeRevision = revision;
+        this.diagnostics.record("storage", "cleanup.failed", {
+          message: store.cleanupError,
+        });
+      }
       this.probing = false;
       this.publishPresence();
       this.changed();
@@ -1912,6 +1929,8 @@ export class StudioRuntime extends EventTarget {
         !this.storageChoosing &&
         !this.sourcesChanging &&
         !this.uploadPending &&
+        (!this.store.cleanupError ||
+          this.cleanupLimitedProbeRevision !== this.checkRevision) &&
         Date.now() >= this.nextCheckAt
       ) {
         this.nextCheckAt = Date.now() + 15_000;

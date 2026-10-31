@@ -186,20 +186,86 @@ describe("bounded native folder check", () => {
     expect(writes).toHaveBeenCalledTimes(3);
   });
 
-  it("times out cleanup separately from successful writing and reading", async () => {
+  it("accepts verified writes with a warning when cleanup times out", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const remove = vi
+      .spyOn(MemoryDirectory.prototype, "removeEntry")
+      .mockImplementation(() => new Promise(() => {}));
+    const progress: string[] = [];
+    const store = new LocalStore(
+      new MemoryDirectory() as unknown as FileSystemDirectoryHandle,
+    );
+    let verifiedCloses = 0;
+    const paths: (1 | 2 | undefined)[] = [];
+    const operation = store.preflight((stage, detail) => {
+      progress.push(stage);
+      if (stage === "Prüfdatei schließen" && detail.status === "finished") {
+        verifiedCloses++;
+        paths.push(detail.check);
+      }
+    });
+    await until(() => progress.at(-1) === "Prüfdateien entfernen");
+    await vi.advanceTimersByTimeAsync(15_001);
+    await operation;
+    expect(verifiedCloses).toBe(2);
+    expect(paths).toEqual([1, 2]);
+    expect(store.cleanupError).toMatch(/StorageTimeoutError.*15 Sekunden/);
+    expect(store.cleanupWarning).toContain("manuell aufräumen");
+    // Subsequent checks still verify writes, but do not queue another hung
+    // delete. The temporary media store shares the selected handle's state.
+    const next = new LocalStore(store.root, "temp");
+    await next.preflight();
+    expect(next.cleanupError).toBe(store.cleanupError);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not require delete permission after both write/read probes succeed", async () => {
+    const root = new MemoryDirectory();
+    const original = await root.getDirectoryHandle("local", { create: true });
+    vi.spyOn(MemoryDirectory.prototype, "removeEntry").mockRejectedValue(
+      new DOMException("Deletion denied", "NotAllowedError"),
+    );
+    const store = new LocalStore(root as unknown as FileSystemDirectoryHandle);
+    await store.preflight();
+    expect(store.cleanupError).toContain("NotAllowedError: Deletion denied");
+    expect(await root.getDirectoryHandle("local")).toBe(original);
+  });
+
+  it("preserves the write failure if best-effort cleanup also fails", async () => {
+    vi.spyOn(MemoryFile.prototype, "createWritable").mockRejectedValueOnce(
+      new DOMException("Writing denied", "NotAllowedError"),
+    );
+    vi.spyOn(MemoryDirectory.prototype, "removeEntry").mockRejectedValue(
+      new Error("Cleanup failed too"),
+    );
+    const store = new LocalStore(
+      new MemoryDirectory() as unknown as FileSystemDirectoryHandle,
+    );
+    await expect(store.preflight()).rejects.toThrow(
+      /Schreibstream öffnen.*Writing denied/,
+    );
+    await until(() => Boolean(store.cleanupError));
+    expect(store.cleanupError).toContain("Cleanup failed too");
+  });
+
+  it("rejects corrupt readback immediately even when cleanup never responds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(MemoryFile.prototype, "getFile").mockResolvedValueOnce(
+      new File(["corrupt"], "probe.json"),
+    );
     vi.spyOn(MemoryDirectory.prototype, "removeEntry").mockImplementation(
       () => new Promise(() => {}),
     );
-    const progress: string[] = [];
-    const operation = new LocalStore(
+    const store = new LocalStore(
       new MemoryDirectory() as unknown as FileSystemDirectoryHandle,
-    ).preflight((stage) => progress.push(stage));
-    const failure = expect(operation).rejects.toThrow(
-      /Prüfdateien entfernen.*15 Sekunden/,
     );
-    await until(() => progress.at(-1) === "Prüfdateien entfernen");
+    const progress: string[] = [];
+    await expect(
+      store.preflight((stage) => progress.push(stage)),
+    ).rejects.toThrow(/Größe der zurückgelesenen Prüfdatei/);
+    const afterFailure = progress.slice();
     await vi.advanceTimersByTimeAsync(15_001);
-    await failure;
+    expect(store.cleanupError).toContain("StorageTimeoutError");
+    expect(progress).toEqual(afterFailure);
   });
 });

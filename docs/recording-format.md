@@ -10,7 +10,7 @@ Jeder Teilnehmer wählt vor der Aufnahme einen lokalen Ordner. Darin liegen alle
 
 ```text
 <gewaehlter-ordner>/
-  temp/<recordingId>/<participantId>/  # Prüfaufnahmen, sofort entfernt
+  temp/<recordingId>/<participantId>/  # Prüfaufnahmen, Aufräumen wird versucht
   local/<recordingId>/session.json     # Nur beim Host: Teilnehmer dieser Sitzung
   local/<recordingId>/<participantId>/ # Ausstehende Originale, höchstens 7 Tage
     recording.json
@@ -54,7 +54,11 @@ Die Zahlen sind illustrative Startzeiten. Kamera- und Audiosegmente müssen nich
 
 Ordnerhandles können in IndexedDB gemerkt werden. Ein erneut ausgewählter Aufnahmeordner bleibt aber auch ohne diesen Komfortzustand auswertbar.
 
-Die Schreibprüfung zeigt Ordneranlage, Dateisperre, Schreiben, Schließen, Rücklesen und Aufräumen getrennt mit der Laufzeit des aktuellen Schritts an. Jeder einzelne Hintergrundaufruf hat 15 Sekunden Zeit; für den gesamten Test gelten höchstens 90 Sekunden. Vorherige Ordneroperationen verbrauchen dadurch nicht das Zeitbudget eines späteren Schließaufrufs. Einzel- und Gesamtdauern stehen im Diagnosebericht. Gespeicherte Ordnerwahl und nichtinteraktive Berechtigungsabfragen sind auf drei Sekunden begrenzt. Das Merken ist optional: Scheitert es, bleibt ein erfolgreich schreib-/lesegeprüfter Ordner für den aktuellen Besuch nutzbar. Native Auswahl- und Berechtigungsdialoge bleiben ohne Zeitlimit unter Kontrolle des Benutzers. Verspätete Antworten einer abgebrochenen Prüfung aktivieren keine Ablage; nur der eigene, eindeutig benannte Prüfbestand wird aufgeräumt.
+Die Schreibprüfung zeigt Ordneranlage, Dateisperre, Schreiben, Schließen, Rücklesen und Aufräumen getrennt mit der Laufzeit des aktuellen Schritts an. Zwei Schreib-/Lesetests prüfen den Segmentbelegpfad und den längeren Übertragungsbelegpfad; die Anzeige unterscheidet Test 1/2 und 2/2. Jeder einzelne Hintergrundaufruf hat 15 Sekunden Zeit; für den Schreib-/Leseteil gelten höchstens 90 Sekunden. Vorherige Ordneroperationen verbrauchen dadurch nicht das Zeitbudget eines späteren Schließaufrufs. Das anschließende optionale Aufräumen bekommt separat höchstens 15 Sekunden. Einzel- und Gesamtdauern stehen im Diagnosebericht. Gespeicherte Ordnerwahl und nichtinteraktive Berechtigungsabfragen sind auf drei Sekunden begrenzt. Das Merken ist optional: Scheitert es, bleibt ein erfolgreich schreib-/lesegeprüfter Ordner für den aktuellen Besuch nutzbar. Native Auswahl- und Berechtigungsdialoge bleiben ohne Zeitlimit unter Kontrolle des Benutzers. Verspätete Antworten einer abgebrochenen Prüfung aktivieren keine Ablage; nur der eigene, eindeutig benannte Prüfbestand wird aufgeräumt.
+
+Schreiben, Schließen und Rücklesen mit Größen- und Hashvergleich müssen vollständig bestehen. Ein anschließend fehlgeschlagenes oder nicht antwortendes Entfernen der Testdateien erzeugt eine eigene sichtbare Warnung und sperrt den Ordner nicht. Ein Fehler beim Schreiben/Lesen wird sofort zurückgegeben und kann nicht durch einen weiteren Aufräumfehler verdeckt werden. Auch das Entfernen einer abgeschlossenen Kamera-/Mikrofon-Prüfaufnahme ist auf 15 Sekunden begrenzt und verändert kein erfolgreiches Prüfergebnis.
+
+Nach einem Aufräumfehler teilen alle Ablagen derselben Ordnerfreigabe diesen Zustand: Weitere automatische Löschversuche, einschließlich der siebentägigen Bereinigung und des Entfernens bereits gesicherter Originale, sind bis zur nächsten Ordnerfreigabe bzw. zum nächsten Seitenbesuch pausiert. Ein verifizierter Export oder quittierter Transfer kann trotzdem abschließen; die lokalen Originale bleiben zusätzlich erhalten. Regelmäßige Gerätechecks und automatische Wiederholungen derselben Konfiguration werden pausiert, damit keine laufend neuen sechssekündigen Prüfaufnahmen entstehen. Nach einer Änderung oder einem neuen Take kann erneut geprüft werden. Die Warnung weist auf manuelles Aufräumen und erhaltene Testdaten unter `temp` hin. Damit ist keine funktionierende Löschberechtigung zugesichert.
 
 ### Netzunterbrechung und Neuladen
 
