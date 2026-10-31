@@ -390,6 +390,7 @@ export class StudioRuntime extends EventTarget {
         storageKind: this.storageKind,
         storageWritable: this.storageWritable,
         storageCleanupError: this.store?.cleanupError || "",
+        storageCleanupPaused: this.store?.cleanupPaused || false,
         audioContextState: this.capture.context?.state,
         sources: this.sources.map((source) => ({
           id: source.id,
@@ -1151,24 +1152,26 @@ export class StudioRuntime extends EventTarget {
       await session?.stop().catch(() => undefined);
       this.cancelProbeDelay = null;
       // Only this check's own folder, created under a fresh id, is deleted.
-      if (started && !store.cleanupError)
+      if (started && !store.cleanupPaused)
         try {
           await storageDeadline(
-            () => store.removeCheck(checkId, false),
+            (signal) => store.removeCheck(checkId, false, signal),
             "Prüfaufnahme entfernen",
           );
         } catch (error) {
           if ((error as DOMException).name !== "NotFoundError")
             store.noteCleanupFailure(error);
         }
-      if (store.cleanupError) {
+      if (store.cleanupPaused) {
         // A successful media check stays ready. Without working deletion, do
         // not accumulate another six-second recording on every periodic check
         // or retry. A source/storage change explicitly invalidates this check.
         this.cleanupLimitedProbeRevision = revision;
-        this.diagnostics.record("storage", "cleanup.failed", {
-          message: store.cleanupError,
-        });
+        this.diagnostics.record(
+          "storage",
+          store.cleanupError ? "cleanup.failed" : "cleanup.paused",
+          { message: store.cleanupError || store.cleanupWarning },
+        );
       }
       this.probing = false;
       this.publishPresence();
@@ -1931,7 +1934,7 @@ export class StudioRuntime extends EventTarget {
         !this.storageChoosing &&
         !this.sourcesChanging &&
         !this.uploadPending &&
-        (!this.store.cleanupError ||
+        (!this.store.cleanupPaused ||
           this.cleanupLimitedProbeRevision !== this.checkRevision) &&
         Date.now() >= this.nextCheckAt
       ) {

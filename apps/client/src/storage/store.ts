@@ -126,7 +126,7 @@ export type StorageCheckProgress = {
 // Do not keep issuing deletes to a native provider that stopped responding.
 const cleanupStates = new WeakMap<
   FileSystemDirectoryHandle,
-  { error: string }
+  { error: string; manual: boolean }
 >();
 const encoder = new TextEncoder();
 // Chromium maps generic OS file errors to these names. On Windows they mostly
@@ -326,14 +326,19 @@ export async function inventoryFingerprint(inventory: Inventory) {
   );
 }
 export class LocalStore {
-  private readonly cleanupState: { error: string };
+  private readonly cleanupState: { error: string; manual: boolean };
   get cleanupError() {
     return this.cleanupState.error;
   }
   get cleanupWarning() {
+    if (this.cleanupState.manual)
+      return "Automatisches Aufräumen ist auf Android vorläufig deaktiviert. Testdaten unter „temp“ und bereits übertragene Originale bleiben lokal erhalten. Bitte bei Bedarf manuell aufräumen.";
     return this.cleanupError
       ? "Testdateien konnten nicht entfernt werden. Automatisches Aufräumen ist pausiert; Testdaten unter „temp“ und bereits übertragene Originale bleiben lokal erhalten. Bitte bei Bedarf manuell aufräumen."
       : "";
+  }
+  get cleanupPaused() {
+    return this.cleanupState.manual || !!this.cleanupError;
   }
   noteCleanupFailure(error: unknown) {
     this.cleanupState.error = (
@@ -352,7 +357,14 @@ export class LocalStore {
   ) {
     let state = cleanupStates.get(root);
     if (!state) {
-      state = { error: "" };
+      state = {
+        error: "",
+        // A stalled native delete cannot be cancelled by a JS timeout and can
+        // obstruct later Android folder access. Keep native files, avoid calls.
+        manual:
+          typeof navigator !== "undefined" &&
+          /Android/i.test(navigator.userAgent || ""),
+      };
       cleanupStates.set(root, state);
     }
     this.cleanupState = state;
@@ -371,6 +383,13 @@ export class LocalStore {
     let cancelled: unknown;
     let base: FileSystemDirectoryHandle | undefined;
     let verified = false;
+    const pending = new Set<Promise<unknown>>();
+    const paths = new WeakMap<FileSystemDirectoryHandle, string>();
+    paths.set(this.root, "");
+    const removals = new Map<
+      string,
+      { parent: FileSystemDirectoryHandle; name: string }
+    >();
     try {
       await storageDeadline(
         async (signal) => {
@@ -398,7 +417,15 @@ export class LocalStore {
             report("started");
             try {
               const result = await storageDeadline(
-                operation,
+                (operationSignal) => {
+                  const call = operation(operationSignal);
+                  pending.add(call);
+                  void call.then(
+                    () => pending.delete(call),
+                    () => pending.delete(call),
+                  );
+                  return call;
+                },
                 `Schreibprüfung für „${this.root.name}“ (${label})`,
                 15_000,
                 signal,
@@ -428,6 +455,10 @@ export class LocalStore {
                   return parent.getDirectoryHandle(part, { create: true });
                 }, "Prüfordner anlegen"),
               );
+              const path = `${paths.get(parent) || ""}/${part}`;
+              paths.set(current, path);
+              if (parts[0] === probe)
+                removals.set(path, { parent, name: part });
             }
             return current;
           };
@@ -442,6 +473,7 @@ export class LocalStore {
               const file = await step("Prüfdatei anlegen", () =>
                 dir.getFileHandle(name, { create: true }),
               );
+              removals.set(`${paths.get(dir)}/${name}`, { parent: dir, name });
               const writable = await step("Schreibstream öffnen", () =>
                 file.createWritable(),
               );
@@ -541,8 +573,7 @@ export class LocalStore {
         90_000,
       );
     } finally {
-      if (base && !this.cleanupError) {
-        const probeRoot = base;
+      if (base && !this.cleanupPaused) {
         const label = "Prüfdateien entfernen";
         const cleanupStarted = performance.now();
         const report = (status: StorageCheckProgress["status"]) => {
@@ -558,20 +589,20 @@ export class LocalStore {
         const cleanup = async () => {
           report("started");
           try {
-            await storageDeadline(
-              (signal) =>
-                retrying(async () => {
+            await storageDeadline(async (signal) => {
+              // Delete only the entries created by this probe, children first.
+              // Native Android providers can stall recursive directory removal.
+              for (const { parent, name } of [...removals.values()].reverse())
+                await retrying(async () => {
                   signal.throwIfAborted();
                   try {
-                    // Only this check's unique probe can be deleted.
-                    await probeRoot.removeEntry(probe, { recursive: true });
+                    await parent.removeEntry(name);
                   } catch (error) {
                     if ((error as DOMException).name !== "NotFoundError")
                       throw error;
                   }
-                }, `Aufräumen von ${probe}`),
-              `Aufräumen für „${this.root.name}“ (${label})`,
-            );
+                }, `Aufräumen von ${probe}`);
+            }, `Aufräumen für „${this.root.name}“ (${label})`);
             report("finished");
           } catch (error) {
             this.noteCleanupFailure(error);
@@ -582,13 +613,18 @@ export class LocalStore {
         // verified probe is optional and has its own 15-second budget. A write
         // failure is returned immediately, even if cleanup also fails or stalls.
         if (verified) await cleanup();
-        else void cleanup();
+        else {
+          // The deadline cancels our wait, not the browser's native operation.
+          // Never queue deletion against a still-open write/close operation.
+          void Promise.allSettled([...pending]).then(cleanup);
+        }
       }
     }
   }
   // Device checks are recorded like real takes (same path length) and removed
   // afterwards. Only folders whose every participant is marked as a check go.
-  async removeCheck(recordingId: string, verify = true) {
+  async removeCheck(recordingId: string, verify = true, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     idSchema.parse(recordingId);
     const base = await directory(this.root, [this.area]);
     if (verify) {
@@ -603,10 +639,24 @@ export class LocalStore {
           throw new Error("Keine reine Prüfaufnahme.");
       }
     }
-    await retrying(
-      () => base.removeEntry(recordingId, { recursive: true }),
-      `Aufräumen der Prüfaufnahme ${recordingId}`,
-    );
+    const remove = async (parent: FileSystemDirectoryHandle, name: string) => {
+      signal?.throwIfAborted();
+      const dir = await parent.getDirectoryHandle(name);
+      for await (const entry of dir.values()) {
+        signal?.throwIfAborted();
+        if (entry.kind === "directory") await remove(dir, entry.name);
+        else
+          await retrying(() => {
+            signal?.throwIfAborted();
+            return dir.removeEntry(entry.name);
+          }, "Prüfdatei entfernen");
+      }
+      await retrying(() => {
+        signal?.throwIfAborted();
+        return parent.removeEntry(name);
+      }, `Aufräumen der Prüfaufnahme ${recordingId}`);
+    };
+    await remove(base, recordingId);
   }
   async participant(
     recordingId: string,
@@ -1338,7 +1388,7 @@ export class LocalStore {
     return result;
   }
   async removeOriginals(inventory: Inventory) {
-    if (this.cleanupError) return;
+    if (this.cleanupPaused) return;
     await whenUnused(inventory.recording, async () => {
       const current = await this.scan(
         inventory.recording.recordingId,
@@ -1389,7 +1439,7 @@ export class LocalStore {
   }
 
   async housekeeping(now = Date.now()) {
-    if (this.area !== "local" || this.cleanupError) return false;
+    if (this.area !== "local" || this.cleanupPaused) return false;
     let changed = await this.migrateLegacy();
     for (const area of ["temp", "local"] as const) {
       let base: FileSystemDirectoryHandle;

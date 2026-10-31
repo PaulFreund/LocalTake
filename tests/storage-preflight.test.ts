@@ -9,6 +9,7 @@ import { MemoryDirectory, MemoryFile } from "./helpers/memory-files.js";
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 async function until(check: () => boolean) {
@@ -165,6 +166,7 @@ describe("bounded native folder check", () => {
           });
         return stream;
       });
+    const removals = vi.spyOn(MemoryDirectory.prototype, "removeEntry");
     const progress: string[] = [];
     const store = new LocalStore(root as unknown as FileSystemDirectoryHandle);
     const operation = store.preflight((stage) => progress.push(stage));
@@ -174,6 +176,7 @@ describe("bounded native folder check", () => {
     await until(() => Boolean(finishClose));
     await vi.advanceTimersByTimeAsync(15_001);
     await failure;
+    expect(removals).not.toHaveBeenCalled();
     const afterTimeout = progress.slice();
     // A new check has its own UUID, so it can succeed while the old native
     // call is still pending. Neither operation touches actual recordings.
@@ -232,6 +235,140 @@ describe("bounded native folder check", () => {
     await store.preflight();
     expect(store.cleanupError).toContain("NotAllowedError: Deletion denied");
     expect(await root.getDirectoryHandle("local")).toBe(original);
+  });
+
+  it("uses native Android folders without issuing any automatic delete", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Linux; Android 15) Chrome/156.0.0.0",
+    });
+    const remove = vi
+      .spyOn(MemoryDirectory.prototype, "removeEntry")
+      .mockRejectedValue(
+        new Error("Native provider must not receive a delete"),
+      );
+    const store = new LocalStore(
+      new MemoryDirectory() as unknown as FileSystemDirectoryHandle,
+    );
+    await store.preflight();
+    expect(store.cleanupError).toBe("");
+    expect(store.cleanupPaused).toBe(true);
+    expect(store.cleanupWarning).toContain("Android");
+    const background = new LocalStore(store.root, "temp");
+    await background.preflight();
+    expect(await store.housekeeping()).toBe(false);
+    expect(background.cleanupPaused).toBe(true);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("still rejects an unconfirmed native Android close without queuing deletion", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Linux; Android 15) Chrome/156.0.0.0",
+    });
+    const create = MemoryFile.prototype.createWritable;
+    vi.spyOn(MemoryFile.prototype, "createWritable").mockImplementationOnce(
+      async function (this: MemoryFile) {
+        const stream = await create.call(this);
+        stream.close = () => new Promise(() => {});
+        return stream;
+      },
+    );
+    const remove = vi.spyOn(MemoryDirectory.prototype, "removeEntry");
+    const store = new LocalStore(
+      new MemoryDirectory() as unknown as FileSystemDirectoryHandle,
+    );
+    const operation = store.preflight();
+    const failure = expect(operation).rejects.toThrow(
+      /Prüfdatei schließen.*15 Sekunden/,
+    );
+    await vi.advanceTimersByTimeAsync(15_001);
+    await failure;
+    expect(store.cleanupPaused).toBe(true);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "cleans only known probe entries, children first, without recursive deletion (foreign=%s)",
+    async (foreign) => {
+      const root = new MemoryDirectory();
+      const original = await root.getDirectoryHandle("local", { create: true });
+      vi.spyOn(MemoryDirectory.prototype, "removeEntry").mockImplementation(
+        async function (
+          this: MemoryDirectory,
+          name: string,
+          options?: { recursive?: boolean },
+        ) {
+          expect(options?.recursive).not.toBe(true);
+          const entry = this.entries.get(name);
+          if (entry instanceof MemoryDirectory && entry.entries.size)
+            throw new DOMException(
+              "Directory not empty",
+              "InvalidModificationError",
+            );
+          this.entries.delete(name);
+        },
+      );
+      const store = new LocalStore(
+        root as unknown as FileSystemDirectoryHandle,
+      );
+      let protectedProbe: MemoryDirectory | undefined;
+      await store.preflight((stage, detail) => {
+        if (
+          foreign &&
+          stage === "Prüfdateien entfernen" &&
+          detail.status === "started"
+        ) {
+          const temp = root.entries.get("temp") as MemoryDirectory;
+          protectedProbe = [...temp.entries.values()][0] as MemoryDirectory;
+          protectedProbe.entries.set(
+            "user.txt",
+            new MemoryFile("user.txt", protectedProbe),
+          );
+        }
+      });
+      expect(await root.getDirectoryHandle("local")).toBe(original);
+      if (foreign) {
+        expect(protectedProbe!.entries.size).toBe(1);
+        expect(protectedProbe!.entries.has("user.txt")).toBe(true);
+        expect(store.cleanupPaused).toBe(true);
+      } else {
+        expect((await root.getDirectoryHandle("temp")).entries.size).toBe(0);
+        expect(store.cleanupPaused).toBe(false);
+      }
+    },
+  );
+
+  it("does not queue another check deletion after cleanup was aborted", async () => {
+    const root = new MemoryDirectory();
+    const temp = await root.getDirectoryHandle("temp", { create: true });
+    const id = crypto.randomUUID();
+    const take = await temp.getDirectoryHandle(id, { create: true });
+    await take.getFileHandle("one.json", { create: true });
+    await take.getFileHandle("two.json", { create: true });
+    let finish!: () => void;
+    const remove = vi
+      .spyOn(MemoryDirectory.prototype, "removeEntry")
+      .mockImplementationOnce(function (this: MemoryDirectory, name: string) {
+        return new Promise<void>((resolve) => {
+          finish = () => {
+            this.entries.delete(name);
+            resolve();
+          };
+        });
+      });
+    const controller = new AbortController();
+    const store = new LocalStore(
+      root as unknown as FileSystemDirectoryHandle,
+      "temp",
+    );
+    const operation = store.removeCheck(id, false, controller.signal);
+    const failure = expect(operation).rejects.toThrow("Cleanup budget used");
+    await until(() => !!finish);
+    controller.abort(new Error("Cleanup budget used"));
+    finish();
+    await failure;
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(take.entries.has("two.json")).toBe(true);
   });
 
   it("preserves the write failure if best-effort cleanup also fails", async () => {

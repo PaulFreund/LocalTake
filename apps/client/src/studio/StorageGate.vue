@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { FolderOpen, LoaderCircle } from "@lucide/vue";
 import {
   DialogContent,
@@ -9,17 +10,37 @@ import {
   DialogTitle,
 } from "reka-ui";
 import { Button } from "@/ui/components/button";
+import { Input } from "@/ui/components/input";
+import { Label } from "@/ui/components/label";
 import { BROWSER_STORAGE_ENABLED } from "../storage/selection.js";
 import { act, studio } from "./state";
 import DiagnosticsPanel from "./DiagnosticsPanel.vue";
 
 const dev = import.meta.env.DEV;
+const joining = ref(false);
+const invitePending = () =>
+  !studio.value.room.credentials && !!studio.value.invite;
+const join = () =>
+  act(async () => {
+    joining.value = true;
+    try {
+      await studio.value.joinRoom();
+    } finally {
+      joining.value = false;
+    }
+  });
 // Recording and receiving need a writable folder, so this dialog cannot be
 // dismissed; it closes once a folder is chosen and its write test passed.
 const open = () =>
-  !studio.value.storageRestoring &&
-  (!studio.value.store || !!studio.value.directoryToReconnect);
-const busy = () => studio.value.storageChoosing || !!studio.value.busy;
+  invitePending() ||
+  studio.value.storageRestoring ||
+  !studio.value.store ||
+  !!studio.value.directoryToReconnect;
+const busy = () =>
+  joining.value ||
+  studio.value.storageChoosing ||
+  !!studio.value.busy ||
+  (!invitePending() && studio.value.storageRestoring);
 </script>
 
 <template>
@@ -34,16 +55,27 @@ const busy = () => studio.value.storageChoosing || !!studio.value.busy;
       >
         <div class="flex items-center justify-between gap-3">
           <DialogTitle class="text-lg font-semibold">{{
-            studio.directoryToReconnect
-              ? "Aufnahmeordner freigeben"
-              : "Aufnahmeordner wählen"
+            invitePending()
+              ? "Einladung annehmen"
+              : studio.storageRestoring
+                ? "Aufnahmeordner prüfen"
+                : studio.directoryToReconnect
+                  ? "Aufnahmeordner freigeben"
+                  : "Aufnahmeordner wählen"
           }}</DialogTitle>
           <DiagnosticsPanel />
         </div>
         <DialogDescription
           class="flex flex-col gap-2 text-sm text-muted-foreground"
         >
-          <template v-if="studio.directoryToReconnect">
+          <template v-if="invitePending()">
+            <span
+              >Du bist noch nicht im Raum. Gib deinen Namen ein und nimm die
+              Einladung an. Danach gibst du deinen lokalen Aufnahmeordner
+              frei.</span
+            >
+          </template>
+          <template v-else-if="studio.directoryToReconnect">
             <span
               >Der Browser braucht erneut deine Erlaubnis, in „{{
                 studio.directoryToReconnect.name
@@ -58,14 +90,14 @@ const busy = () => studio.value.storageChoosing || !!studio.value.busy;
               erlaube den Schreibzugriff.</span
             >
           </template>
-          <span
+          <span v-if="!invitePending()"
             >Am besten ein lokales Laufwerk mit genug freiem Platz und keinen
             Ordner, den OneDrive, Dropbox oder ein ähnlicher Dienst
             synchronisiert.</span
           >
         </DialogDescription>
         <p
-          v-if="!studio.folderSupported"
+          v-if="!invitePending() && !studio.folderSupported"
           class="text-sm text-destructive"
           role="alert"
         >
@@ -80,15 +112,38 @@ const busy = () => studio.value.storageChoosing || !!studio.value.busy;
           {{ studio.error }}
         </p>
         <p
-          v-if="busy() && studio.notice"
+          v-if="!invitePending() && busy()"
           class="flex items-center gap-2 text-sm text-muted-foreground"
           role="status"
         >
           <LoaderCircle class="size-4 animate-spin" aria-hidden="true" />{{
-            studio.notice
+            studio.notice || "Gespeicherten Aufnahmeordner laden …"
           }}
         </p>
-        <div class="flex flex-wrap justify-end gap-2">
+        <form
+          v-if="invitePending()"
+          class="flex flex-col gap-3"
+          @submit.prevent="join"
+        >
+          <Label for="invite-name">Dein Name</Label>
+          <Input
+            id="invite-name"
+            autocomplete="nickname"
+            :maxlength="60"
+            :model-value="studio.name"
+            :disabled="busy()"
+            @update:model-value="studio.setName(String($event))"
+          />
+          <Button type="submit" :disabled="busy() || !studio.name.trim()">
+            <LoaderCircle
+              v-if="joining"
+              class="size-4 animate-spin"
+              aria-hidden="true"
+            />
+            {{ joining ? "Beitritt läuft …" : "Einladung annehmen" }}
+          </Button>
+        </form>
+        <div v-else class="flex flex-wrap justify-end gap-2">
           <Button
             v-if="dev"
             variant="ghost"

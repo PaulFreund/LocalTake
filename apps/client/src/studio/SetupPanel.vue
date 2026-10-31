@@ -270,8 +270,15 @@ const addSynthetic = () =>
         </p>
         <p v-if="studio.store" class="text-xs text-muted-foreground">
           Prüfdateien: temp · ausstehende Originale: local · fertige Spuren:
-          Raum/Aufnahme. LocalTake entfernt lokale Originale nach 7 Tagen,
-          solange die Seite geöffnet und der Ordner freigegeben ist.
+          Raum/Aufnahme.
+          <template v-if="studio.store.cleanupPaused">
+            Automatisches Löschen ist pausiert; die lokalen Dateien bleiben
+            erhalten.
+          </template>
+          <template v-else>
+            LocalTake entfernt lokale Originale nach 7 Tagen, solange die Seite
+            geöffnet und der Ordner freigegeben ist.
+          </template>
         </p>
       </SidebarGroupContent>
     </SidebarGroup>
