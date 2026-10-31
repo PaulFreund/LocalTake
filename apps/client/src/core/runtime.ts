@@ -18,6 +18,7 @@ import {
 } from "../storage/selection.js";
 import { RecordingSession } from "../recorder/session.js";
 import { RoomClient } from "../room/client.js";
+import { reconnectedRecordingStatus } from "../room/recovery.js";
 import { LiveMesh } from "../live/mesh.js";
 import { TransferManager } from "../transfer/manager.js";
 import { AutomaticSync } from "../transfer/sync.js";
@@ -962,7 +963,7 @@ export class StudioRuntime extends EventTarget {
       this.recording ||
       this.probing ||
       this.pendingStart ||
-      this.groupActive ||
+      (this.groupActive && !!this.store) ||
       this.busy ||
       [...this.transfer.transfers.values()].some((t) =>
         ["transferring", "paused", "verifying"].includes(t.state),
@@ -1380,11 +1381,25 @@ export class StudioRuntime extends EventTarget {
       this.presenceSent = "";
       this.uploadSent = "";
       this.publishPresence();
-      if (this.recording || this.lastRecording)
+      const localStatus = (this.recording || this.lastRecording)?.status;
+      const status = reconnectedRecordingStatus(
+        localStatus,
+        message.state.peers.find((peer) => peer.id === message.participantId)
+          ?.recording,
+      );
+      if (status) {
+        if (!localStatus) {
+          this.notice =
+            "Die Aufnahme dieses Geräts wurde durch Neuladen unterbrochen. Gesicherte Teilsegmente bleiben erhalten. Für weitere Aufnahmen nach dem gemeinsamen Stopp einen neuen Take starten.";
+          this.diagnostics.record("recorder", "interrupted_by_reload", {
+            recordingId: status.recordingId,
+          });
+        }
         this.room.send({
           type: "record.status",
-          status: (this.recording || this.lastRecording)!.status,
+          status,
         });
+      }
     }
     if (message.type === "room.state" || message.type === "welcome") {
       const take = message.state.take;

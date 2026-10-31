@@ -72,6 +72,10 @@ Zwei zusätzliche isolierte Edge-Kontexte bestätigten den sichtbaren Dialog: Ei
 
 Dies ist ein Desktop-Edge-Nachweis mit künstlich blockierten Browseraufrufen und isolierter Testablage, keine Freigabe eines tatsächlichen Android-Dateianbieters. Der physische Android-Test und mobile Hintergrund-/Sperrzustände bleiben zu prüfen. Das Verhalten bei Netzverlust, Neuladen und erhaltenen Teilbeständen steht unter [Aufnahmeformat](recording-format.md#netzunterbrechung-und-neuladen).
 
+Die zusätzliche Prüfung eines Neuladens **während einer laufenden Aufnahme** fand einen erhaltenen, aber nicht mehr von einem lokalen Recorder gedeckten Serverstatus. Der neue Client meldet diesen beim Wiederbeitritt als `partial`; ein laufender Recorder bei bloßer Signalisierungs-Wiederverbindung meldet weiter seinen tatsächlichen Zustand. Außerdem darf ein frisch geöffnetes Studio ohne aktive Ablage den ursprünglichen Ordner wieder übernehmen, während der übrige Take noch läuft. Fünf Regressionen unterscheiden laufende, abgeschlossene und tatsächlich unterbrochene lokale Recorder; insgesamt bestehen damit 17 Rust- und 229 Vitest-Tests in 26 Dateien.
+
+Ein eigener Browserlauf lud den Gast mitten im Take neu: Ordner und Raum wurden wieder geöffnet, der Gast erschien als Teilbestand, der Host konnte regulär stoppen und die vier bestätigten Gastsegmente kamen beim Host an. Der Hostbestand war vollständig, der Gastbestand blieb korrekt als unvollständig gekennzeichnet. Beide Teilnehmer wurden anschließend wieder bereit und zeichneten einen neuen Take mit eigener ID auf; dessen Abschluss und Übertragung bestanden. Keine unbehandelten Browserausnahmen oder CSP-Verstöße.
+
 ## Offene Systemabnahme
 
 Die folgenden Nachweise erfordern die tatsächliche Zielumgebung:
